@@ -238,7 +238,7 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .search{margin-left:auto;font-family:var(--mono);font-size:12.5px;padding:6px 11px;
   border-radius:8px;border:1px solid var(--line-2);background:var(--bg);color:var(--fg);
   min-width:150px}
-.row{display:grid;grid-template-columns:100px 1fr auto;gap:14px;align-items:center;
+.row{display:grid;grid-template-columns:100px 1fr auto auto;gap:14px;align-items:center;
   padding:11px 20px;border-top:1px solid var(--line)}
 .row:hover{background:var(--panel-2)}
 .when{font-family:var(--mono);font-size:11px;color:var(--faint)}
@@ -252,6 +252,30 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .tag[data-b="par22"]{background:rgba(224,180,78,.14);color:var(--a22)}
 .tag[data-b="neutral"]{background:rgba(107,116,132,.16);color:var(--neutral)}
 .tag[data-b="unknown"]{background:rgba(240,113,79,.14);color:var(--alert)}
+.tag.src-manual{background:rgba(91,147,245,.12);color:var(--dim);margin-left:5px}
+.txdel{background:none;border:none;color:var(--faint);font-size:14px;cursor:pointer;
+  padding:2px 6px;border-radius:6px;line-height:1}
+.txdel:hover{color:var(--down);background:rgba(240,113,79,.10)}
+
+/* Manuelle Buchung anlegen */
+.txform{padding:14px 20px;border-top:1px solid var(--line);background:var(--panel-2)}
+.txform-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px}
+.txform label{display:flex;flex-direction:column;gap:4px;font-size:11px;color:var(--dim)}
+.txform input,.txform select{background:var(--panel);border:1px solid var(--line);color:var(--fg);
+  border-radius:8px;padding:8px 10px;font-family:var(--sans);font-size:13px;width:100%;
+  box-sizing:border-box}
+.txform input[type=number]{font-family:var(--mono)}
+.entry-rows{margin:4px 0 10px}
+.entryrow{display:flex;gap:6px;margin-bottom:6px;align-items:center}
+.entryrow input.easset{flex:0 0 78px;text-transform:uppercase;font-family:var(--mono)}
+.entryrow input.eamt{flex:1;font-family:var(--mono)}
+.entryrow select.ekind{flex:0 0 96px}
+.entryrow button.erm{flex:0 0 auto;background:none;border:none;color:var(--faint);
+  font-size:15px;cursor:pointer;padding:4px 8px}
+.entryrow button.erm:hover{color:var(--down)}
+.txform-add{background:none;border:1px dashed var(--line-2);color:var(--dim);
+  border-radius:8px;padding:6px 12px;font-size:12px;cursor:pointer;width:100%}
+.txform-actions{display:flex;gap:8px;margin-top:12px}
 .note-s{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:2px;
   overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .amt{text-align:right;font-family:var(--mono);font-size:12.5px;
@@ -293,7 +317,7 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
   border:1px solid var(--line-2);background:var(--bg);color:var(--fg);width:110px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
 @media (max-width:640px){
-  .row{grid-template-columns:1fr auto;gap:7px}
+  .row{grid-template-columns:1fr auto auto;gap:7px}
   .when{grid-column:1/-1}
   .lot{grid-template-columns:1fr;row-gap:6px}
   .hero-v{font-size:31px}
@@ -1098,25 +1122,79 @@ function taxPanel(){
 
 /* ================= Transaktionen ================= */
 
-function rowHtml(t){
+function rowHtml(t, opts){
+  opts = opts || {};
   const amts = t.entries.map(e=>{
     const v=N(e.amount), cls=e.kind==="fee"?"fee":v>=0?"pos":"neg";
     const pre=e.kind==="fee"?"Gebühr ":v>=0?"+":"";
     return `<i class="${cls}">${pre}${nfx(e.amount)} ${esc(e.asset)}</i>`;}).join("");
+  const srcTag = t.source==="manual"
+    ? `<span class="tag src-manual">Manuell</span>` : "";
+  const delBtn = (opts.editable && t.source==="manual")
+    ? `<button class="txdel" data-id="${t.id}" title="Buchung löschen">✕</button>` : "";
   return `<div class="row"><div class="when">${dtm(t.ts_utc)}</div>
     <div class="what"><div class="title">${esc(TXL[t.tx_type]||t.tx_type)}
       <span class="tag" data-b="${t.tax_bucket}">${esc((B[t.tax_bucket]||{}).s||t.tax_bucket)}</span>
+      ${srcTag}
     </div>${t.note?`<div class="note-s">${esc(t.note)}</div>`:""}</div>
-    <div class="amt">${amts}</div></div>`;
+    <div class="amt">${amts}</div>${delBtn}</div>`;
 }
+
+let TXFORM_OPEN = false;
+let TXFORM_ENTRIES = [{asset:"",amount:"",kind:"principal"}];
+const ENTRY_KIND_L = {principal:"Bestand",fee:"Gebühr",pnl:"Erg. (PnL)",funding:"Funding"};
 
 function txPanel(){
   const chips=[["","Alle"]].concat(ORDER.filter(k=>STATE.bucketTotals[k]).map(k=>[k,B[k].s]));
   return `<div class="card"><div class="filters">
     ${chips.map(([v,l])=>`<button class="chip" data-f="${v}"
       aria-pressed="${TXQ.bucket===v}">${esc(l)}</button>`).join("")}
-    <input class="search" id="txq" placeholder="suchen…" value="${esc(TXQ.q)}"></div>
+    <input class="search" id="txq" placeholder="suchen…" value="${esc(TXQ.q)}">
+    <button class="act" id="btnTxAdd" style="margin-left:auto">${
+      TXFORM_OPEN?"Abbrechen":"+ Buchung"}</button></div>
+    <div id="txFormWrap">${TXFORM_OPEN?txFormHtml():""}</div>
     <div id="txList"><div class="empty"><p>Lade…</p></div></div></div>`;
+}
+
+function txFormHtml(){
+  const accOpts = ["funding","trading","earn"]
+    .map(a=>`<option value="${a}">${a==="funding"?"Funding":a==="trading"?"Trading":"Earn"}</option>`).join("");
+  const typeOpts = Object.entries(TXL)
+    .map(([k,l])=>`<option value="${k}">${esc(l)}</option>`).join("");
+  const bucketOpts = ORDER.map(k=>`<option value="${k}">${esc(B[k].s)}</option>`).join("");
+
+  const now = new Date();
+  now.setMinutes(now.getMinutes() - now.getTimezoneOffset());
+  const nowLocal = now.toISOString().slice(0,16);
+
+  return `<div class="txform">
+    <div class="txform-grid">
+      <label>Datum/Uhrzeit<input type="datetime-local" id="tf-when" value="${nowLocal}"></label>
+      <label>Konto<select id="tf-account">${accOpts}</select></label>
+      <label>Vorgangsart<select id="tf-type">${typeOpts}</select></label>
+      <label>Steuertopf<select id="tf-bucket">${bucketOpts}</select></label>
+    </div>
+    <label style="margin-bottom:10px">Notiz (optional)
+      <input type="text" id="tf-note" placeholder="z.B. Kraken-Einzahlung nachgetragen"></label>
+    <div class="tx-hint" style="margin-bottom:4px">Buchungszeilen (Asset, Betrag, Art)</div>
+    <div class="entry-rows" id="tf-entries">${TXFORM_ENTRIES.map((e,i)=>entryRowHtml(e,i)).join("")}</div>
+    <button class="txform-add" id="tf-addrow">+ weitere Buchungszeile</button>
+    <div class="txform-actions">
+      <button class="act primary" id="tf-save">Speichern</button>
+    </div>
+    <div id="tf-err"></div>
+  </div>`;
+}
+
+function entryRowHtml(e, i){
+  const kindOpts = Object.entries(ENTRY_KIND_L)
+    .map(([k,l])=>`<option value="${k}" ${e.kind===k?"selected":""}>${esc(l)}</option>`).join("");
+  return `<div class="entryrow" data-i="${i}">
+    <input class="easset" placeholder="USDC" value="${esc(e.asset)}">
+    <input class="eamt" placeholder="12,34 oder -12,34" value="${esc(e.amount)}">
+    <select class="ekind">${kindOpts}</select>
+    ${TXFORM_ENTRIES.length>1?`<button class="erm" data-i="${i}">✕</button>`:""}
+  </div>`;
 }
 
 async function loadTx(append){
@@ -1127,12 +1205,13 @@ async function loadTx(append){
   TXD = append&&TXD ? {...d, items:TXD.items.concat(d.items)} : d;
   const el=$("#txList"); if(!el) return;
   el.innerHTML = TXD.items.length
-    ? TXD.items.map(rowHtml).join("") + (TXD.items.length<TXD.total
+    ? TXD.items.map(t=>rowHtml(t,{editable:true})).join("") + (TXD.items.length<TXD.total
         ? `<div class="more"><button class="act" id="txMore">Weitere laden (${
             TXD.items.length} von ${TXD.total})</button></div>`
         : `<div class="more"><span class="eyebrow">${TXD.total} Vorgänge · alle geladen</span></div>`)
     : `<div class="empty"><h3>Nichts gefunden</h3><p>Für diesen Filter gibt es keine Vorgänge.</p></div>`;
   if($("#txMore")) $("#txMore").onclick=()=>{TXQ.offset=TXD.items.length;loadTx(true);};
+  wireTxDelete();
 }
 
 /* ================= Import ================= */
@@ -1262,6 +1341,91 @@ function wireTx(){
     loadTx(false);});
   let t; $("#txq").oninput=e=>{clearTimeout(t);
     t=setTimeout(()=>{TXQ.q=e.target.value.trim();TXQ.offset=0;TXD=null;loadTx(false);},250);};
+
+  if($("#btnTxAdd")) $("#btnTxAdd").onclick=()=>{
+    TXFORM_OPEN = !TXFORM_OPEN;
+    if(TXFORM_OPEN) TXFORM_ENTRIES = [{asset:"",amount:"",kind:"principal"}];
+    $("#btnTxAdd").textContent = TXFORM_OPEN ? "Abbrechen" : "+ Buchung";
+    $("#txFormWrap").innerHTML = TXFORM_OPEN ? txFormHtml() : "";
+    if(TXFORM_OPEN) wireTxForm();
+  };
+}
+
+function captureEntries(){
+  const rows = document.querySelectorAll("#tf-entries .entryrow");
+  if(!rows.length) return;
+  TXFORM_ENTRIES = Array.from(rows).map(r=>({
+    asset: r.querySelector(".easset").value,
+    amount: r.querySelector(".eamt").value,
+    kind: r.querySelector(".ekind").value,
+  }));
+}
+
+function renderEntries(){
+  $("#tf-entries").innerHTML = TXFORM_ENTRIES.map((e,i)=>entryRowHtml(e,i)).join("");
+  document.querySelectorAll("#tf-entries .erm").forEach(b=>b.onclick=()=>{
+    captureEntries();
+    TXFORM_ENTRIES.splice(+b.dataset.i, 1);
+    renderEntries();
+  });
+}
+
+function wireTxForm(){
+  renderEntries();
+  $("#tf-addrow").onclick=()=>{
+    captureEntries();
+    TXFORM_ENTRIES.push({asset:"",amount:"",kind:"principal"});
+    renderEntries();
+  };
+  $("#tf-save").onclick=async()=>{
+    captureEntries();
+    const whenRaw = $("#tf-when").value;
+    if(!whenRaw){ $("#tf-err").innerHTML=`<div class="warn">Datum/Uhrzeit fehlt.</div>`; return; }
+    const entries = TXFORM_ENTRIES
+      .map(e=>({asset:(e.asset||"").trim().toUpperCase(),
+                amount:(e.amount||"").trim().replace(",", "."), kind:e.kind}))
+      .filter(e=>e.asset && e.amount!=="");
+    if(!entries.length){
+      $("#tf-err").innerHTML=`<div class="warn">Mindestens eine Buchungszeile mit Asset und Betrag angeben.</div>`;
+      return;
+    }
+    for(const e of entries){
+      if(Number.isNaN(Number(e.amount))){
+        $("#tf-err").innerHTML=`<div class="warn">„${esc(e.amount)}“ ist kein gültiger Betrag.</div>`;
+        return;
+      }
+    }
+    const btn = $("#tf-save"); btn.disabled = true; btn.textContent = "Speichere…";
+    try{
+      const r = await api("/api/tx-add", {
+        ts_utc: new Date(whenRaw).toISOString(),
+        account: $("#tf-account").value,
+        tx_type: $("#tf-type").value,
+        tax_bucket: $("#tf-bucket").value,
+        note: $("#tf-note").value.trim() || null,
+        entries,
+      });
+      STATE = r.state; TXFORM_OPEN = false; PF=TAXR=CURVE=FEES=null;
+      TXQ.offset = 0; TXD = null;
+      render(); loadTx(false); refreshDerived();
+    }catch(e){
+      $("#tf-err").innerHTML=`<div class="warn">${esc(e.message||e)}</div>`;
+      btn.disabled = false; btn.textContent = "Speichern";
+    }
+  };
+}
+
+function wireTxDelete(){
+  document.querySelectorAll(".txdel").forEach(b=>b.onclick=async()=>{
+    if(!confirm("Diese manuell angelegte Buchung löschen?")) return;
+    try{
+      const r = await api("/api/tx-delete", {id: +b.dataset.id});
+      STATE = r.state; PF=TAXR=CURVE=FEES=null;
+      TXD = null; loadTx(false); refreshDerived();
+    }catch(e){
+      alert("Löschen fehlgeschlagen: " + (e.message||e));
+    }
+  });
 }
 function wirePicker(){
   document.querySelectorAll("[data-pick]").forEach(b=>b.onclick=async()=>{
