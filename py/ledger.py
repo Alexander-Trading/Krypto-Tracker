@@ -311,6 +311,16 @@ def update_transaction(conn, tx_id, tax_bucket=None, tx_type=None, note=None):
     conn.commit()
 
 
+def delete_transaction(conn: sqlite3.Connection, tx_id: int):
+    """Loescht eine Buchung samt ihrer Entries (FK ON DELETE CASCADE)."""
+    row = conn.execute("SELECT id, source FROM transactions WHERE id = ?",
+                       (tx_id,)).fetchone()
+    if not row:
+        raise ValueError(f"Vorgang {tx_id} existiert nicht.")
+    conn.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
+    conn.commit()
+
+
 def unknown_count(conn) -> int:
     return conn.execute(
         "SELECT COUNT(*) FROM transactions WHERE tax_bucket = 'unknown'"

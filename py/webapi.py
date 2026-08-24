@@ -17,6 +17,7 @@ reicht und wird von der JS-Seite genauso behandelt wie ein HTTP-Fehler.
 import json
 import urllib.parse
 import asyncio
+import uuid
 from decimal import Decimal
 
 import ledger as L
@@ -273,7 +274,7 @@ async def _route_get(path, query, conn):
 
         rows = conn.execute(
             f"""SELECT t.id, t.ts_utc, t.tx_type, t.account, t.tax_bucket,
-                       t.note, t.external_id
+                       t.note, t.external_id, t.source
                 FROM transactions t{clause}
                 ORDER BY t.ts_utc DESC, t.id DESC LIMIT ? OFFSET ?""",
             args + [limit, offset]).fetchall()
@@ -339,6 +340,34 @@ async def _route_post(path, body, conn):
             conn, int(body["id"]),
             tax_bucket=body.get("tax_bucket"), tx_type=body.get("tx_type"),
             note=body.get("note"))
+        return {"ok": True, "state": build_state(conn)}
+
+    if path == "/api/tx-add":
+        entries_in = body.get("entries") or []
+        if not entries_in:
+            return {"__error__": "Mindestens ein Eintrag (Asset + Betrag) nötig."}
+        entries = [L.Entry(e["asset"], e["amount"], e.get("kind") or "principal")
+                  for e in entries_in]
+        tx = L.Transaction(
+            ts_utc=body["ts_utc"], tx_type=body["tx_type"],
+            account=body.get("account") or "trading",
+            tax_bucket=body["tax_bucket"], source="manual",
+            external_id=f"manual-{uuid.uuid4().hex}",
+            note=body.get("note") or None, entries=entries)
+        tx_id = L.add_transaction(conn, tx)
+        conn.commit()
+        return {"ok": True, "id": tx_id, "state": build_state(conn)}
+
+    if path == "/api/tx-delete":
+        row = conn.execute("SELECT source FROM transactions WHERE id = ?",
+                           (int(body["id"]),)).fetchone()
+        if not row:
+            return {"__error__": "Vorgang nicht gefunden."}
+        if row["source"] != "manual":
+            return {"__error__":
+                "Nur manuell angelegte Buchungen lassen sich hier löschen. "
+                "Importierte Buchungen bitte über „Alles löschen“ + Re-Import korrigieren."}
+        L.delete_transaction(conn, int(body["id"]))
         return {"ok": True, "state": build_state(conn)}
 
     if path == "/api/instmap":
