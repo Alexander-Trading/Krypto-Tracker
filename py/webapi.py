@@ -187,7 +187,7 @@ def seed_demo(conn):
 
 # --- Routen (Gegenstueck zu app.py's do_GET/do_POST) ------------------------
 
-def _route_get(path, query, conn):
+async def _route_get(path, query, conn):
     q = urllib.parse.parse_qs(query)
 
     if path == "/api/market":
@@ -199,7 +199,7 @@ def _route_get(path, query, conn):
         for pos in positions:
             m = instmap.get(pos["instrument"]) or {}
             try:
-                snap = MK.snapshot(pos, m.get("instId"), m.get("instType"))
+                snap = await MK.snapshot(pos, m.get("instId"), m.get("instType"))
             except Exception as exc:
                 snap = {"instrument": pos.get("instrument"), "errors": [str(exc)]}
             if snap.get("resolvedTo") and pos["instrument"] not in instmap:
@@ -210,10 +210,10 @@ def _route_get(path, query, conn):
         return {"positions": out}
 
     if path == "/api/portfolio":
-        return TAX.portfolio(conn, get_state(conn, "positions") or [], MK.eur_rate_on)
+        return await TAX.portfolio(conn, get_state(conn, "positions") or [], MK.eur_rate_on)
 
     if path == "/api/tax":
-        rep = TAX.build_report(conn, fetcher=MK.eur_rate_on)
+        rep = await TAX.build_report(conn, fetcher=MK.eur_rate_on)
         fmt = (q.get("format") or [""])[0]
         if fmt == "csv":
             return {"__csv__": TAX.report_csv(rep)}
@@ -239,7 +239,7 @@ def _route_get(path, query, conn):
         return rep
 
     if path == "/api/capital-curve":
-        return TAX.capital_curve(conn, fetcher=MK.eur_rate_on)
+        return await TAX.capital_curve(conn, fetcher=MK.eur_rate_on)
 
     if path == "/api/fees":
         return TAX.fees_summary(conn)
@@ -251,7 +251,7 @@ def _route_get(path, query, conn):
 
     if path == "/api/instruments":
         try:
-            return {"items": MK.search_instruments((q.get("q") or [""])[0])}
+            return {"items": await MK.search_instruments((q.get("q") or [""])[0])}
         except MK.MarketError as exc:
             return {"items": [], "error": str(exc)}
 
@@ -291,7 +291,7 @@ def _route_get(path, query, conn):
     return {"__error__": "Nicht gefunden", "__status__": 404}
 
 
-def _route_post(path, body, conn):
+async def _route_post(path, body, conn):
     if path == "/api/preview":
         return analyse_csv(body.get("text", ""))
 
@@ -360,10 +360,18 @@ def _route_post(path, body, conn):
     return {"__error__": "Nicht gefunden", "__status__": 404}
 
 
-def dispatch(method, path_with_query, body_json):
+def validate_import(path):
+    """Direkt von JS aufgerufen (nicht ueber dispatch): prueft eine
+    hochgeladene .db-Datei, bevor sie /persist/tracker.db ersetzt."""
+    return _dump(L.inspect_db_file(path))
+
+
+async def dispatch(method, path_with_query, body_json):
     """Einziger Einstiegspunkt von JS aus. method: 'GET'|'POST'.
     path_with_query: z.B. '/api/transactions?bucket=unknown&limit=50'.
-    body_json: JSON-String oder leer."""
+    body_json: JSON-String oder leer. Async, weil Markt-/Kursabrufe im
+    Browser ueber pyfetch laufen muessen (siehe market.py) - der Aufruf
+    von JS aus bekommt dafuer automatisch ein Promise zurueck."""
     if "?" in path_with_query:
         path, query = path_with_query.split("?", 1)
     else:
@@ -372,10 +380,10 @@ def dispatch(method, path_with_query, body_json):
     conn = _connect()
     try:
         if method == "GET":
-            result = _route_get(path, query, conn)
+            result = await _route_get(path, query, conn)
         else:
             body = json.loads(body_json) if body_json else {}
-            result = _route_post(path, body, conn)
+            result = await _route_post(path, body, conn)
         return _dump(result)
     except Exception as exc:
         return _dump({"__error__": str(exc)})

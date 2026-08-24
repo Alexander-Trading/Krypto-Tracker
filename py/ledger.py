@@ -87,6 +87,29 @@ def sha256_file(path: Path) -> str:
     return h.hexdigest()
 
 
+def inspect_db_file(path):
+    """Prueft eine fremde .db-Datei, bevor sie die eigene ersetzt (Import auf
+    einem anderen Geraet). Oeffnet read-only, damit bei einer beschaedigten
+    oder falschen Datei nichts angefasst wird."""
+    import sqlite3
+    try:
+        conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+        conn.row_factory = sqlite3.Row
+        tables = {r[0] for r in conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        if not {"transactions", "entries"} <= tables:
+            conn.close()
+            return {"ok": False,
+                    "error": "Das sieht nicht nach einer Krypto-Tracker-Datenbank aus."}
+        tx_count = conn.execute("SELECT COUNT(*) FROM transactions").fetchone()[0]
+        span = conn.execute(
+            "SELECT MIN(ts_utc), MAX(ts_utc) FROM transactions").fetchone()
+        conn.close()
+        return {"ok": True, "txCount": tx_count, "from": span[0], "to": span[1]}
+    except Exception as exc:
+        return {"ok": False, "error": f"Datei lässt sich nicht öffnen: {exc}"}
+
+
 # --- Datenklassen ----------------------------------------------------------
 
 @dataclass

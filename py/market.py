@@ -22,6 +22,14 @@ from decimal import Decimal
 BASE = "https://www.okx.com"
 TIMEOUT = 12
 
+# Pyodide (Browser/WebAssembly) hat keine echten Sockets - urllib kann dort
+# gar keine Verbindung aufbauen ("TLS not supported in this environment").
+# Der Browser selbst kann aber sehr wohl Netzwerkanfragen stellen; Pyodide
+# reicht das über pyfetch() durch (nutzt fetch() im Hintergrund). Deshalb
+# ist _get() jetzt async und verzweigt je nach Umgebung - der Rest von
+# market.py bleibt inhaltlich unveraendert, nur mit await davor.
+IN_PYODIDE = sys.platform == "emscripten"
+
 # Falls die Tier-Tabelle nicht erreichbar ist: Bandbreite statt Einzelwert.
 # Bei kleinem Hebel macht die Wartungsmarge kaum einen Unterschied, bei
 # grossem sehr wohl - deshalb zeigen wir die Spanne, statt zu raten.
@@ -50,18 +58,30 @@ def _ssl_context():
         return ssl.create_default_context()
 
 
-def _get(path, **params):
+async def _get(path, **params):
     url = BASE + path
     if params:
         url += "?" + urllib.parse.urlencode(
             {k: v for k, v in params.items() if v is not None})
+
+    if IN_PYODIDE:
+        payload = await _get_pyodide(url)
+    else:
+        payload = _get_urllib(url)
+
+    if str(payload.get("code")) != "0":
+        raise MarketError(f"OKX meldet: {payload.get('msg') or payload.get('code')}")
+    return payload.get("data") or []
+
+
+def _get_urllib(url):
     req = urllib.request.Request(url, headers={"User-Agent": "tracker/0.1"})
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT,
                                     context=_ssl_context()) as resp:
-            payload = json.loads(resp.read().decode())
+            return json.loads(resp.read().decode())
     except urllib.error.HTTPError as exc:
-        raise MarketError(f"HTTP {exc.code} bei {path}") from None
+        raise MarketError(f"HTTP {exc.code} bei {url}") from None
     except urllib.error.URLError as exc:
         reason = str(exc.reason)
         if "CERTIFICATE_VERIFY_FAILED" in reason or "SSL" in reason.upper():
@@ -70,9 +90,25 @@ def _get(path, **params):
     except TimeoutError:
         raise MarketError("Zeitüberschreitung beim Abruf") from None
 
-    if str(payload.get("code")) != "0":
-        raise MarketError(f"OKX meldet: {payload.get('msg') or payload.get('code')}")
-    return payload.get("data") or []
+
+async def _get_pyodide(url):
+    import pyodide.http
+    try:
+        resp = await pyodide.http.pyfetch(
+            url, headers={"User-Agent": "tracker/0.1"})
+    except Exception as exc:
+        # Kommt hierher, wenn schon die Anfrage selbst scheitert - typischerweise
+        # ein CORS-Block durch OKX, nicht durch uns.
+        raise MarketError(
+            f"Keine Verbindung zu OKX aus dem Browser heraus: {exc}. "
+            "Möglich, dass OKX Anfragen direkt aus dem Browser nicht zulässt "
+            "(CORS) - dann bräuchte es einen Server-Umweg.") from None
+    if not resp.ok:
+        raise MarketError(f"HTTP {resp.status} bei {url}")
+    try:
+        return await resp.json()
+    except Exception as exc:
+        raise MarketError(f"Antwort von OKX nicht lesbar: {exc}") from None
 
 
 def D(v):
@@ -81,9 +117,9 @@ def D(v):
 
 # --- Einzelabrufe ----------------------------------------------------------
 
-def instrument(inst_id, inst_type="FUTURES"):
+async def instrument(inst_id, inst_type="FUTURES"):
     """Kontraktdaten: Kontraktgroesse, Verfallsdatum, Abwicklungswaehrung."""
-    data = _get("/api/v5/public/instruments", instType=inst_type, instId=inst_id)
+    data = await _get("/api/v5/public/instruments", instType=inst_type, instId=inst_id)
     if not data:
         raise MarketError(f"Kontrakt {inst_id} nicht gefunden")
     d = data[0]
@@ -98,26 +134,26 @@ def instrument(inst_id, inst_type="FUTURES"):
     }
 
 
-def mark_price(inst_id, inst_type="FUTURES"):
+async def mark_price(inst_id, inst_type="FUTURES"):
     """Der Mark-Preis ist die Referenz fuer Liquidationen - nicht der
     zuletzt gehandelte Kurs."""
-    data = _get("/api/v5/public/mark-price", instType=inst_type, instId=inst_id)
+    data = await _get("/api/v5/public/mark-price", instType=inst_type, instId=inst_id)
     if not data:
         raise MarketError(f"Kein Mark-Preis für {inst_id}")
     return D(data[0].get("markPx"))
 
 
-def last_price(inst_id):
-    data = _get("/api/v5/market/ticker", instId=inst_id)
+async def last_price(inst_id):
+    data = await _get("/api/v5/market/ticker", instId=inst_id)
     if not data:
         raise MarketError(f"Kein Kurs für {inst_id}")
     return D(data[0].get("last"))
 
 
-def maintenance_margin_rate(inst_family, notional, inst_type="FUTURES"):
+async def maintenance_margin_rate(inst_family, notional, inst_type="FUTURES"):
     """Waehlt aus der gestaffelten Tier-Tabelle die Stufe, in die die
     Positionsgroesse faellt, und gibt deren Wartungsmargenquote zurueck."""
-    data = _get("/api/v5/public/position-tiers", instType=inst_type,
+    data = await _get("/api/v5/public/position-tiers", instType=inst_type,
                 tdMode="isolated", instFamily=inst_family)
     if not data:
         raise MarketError(f"Keine Tier-Tabelle für {inst_family}")
@@ -136,9 +172,9 @@ def maintenance_margin_rate(inst_family, notional, inst_type="FUTURES"):
 INST_TYPES = ("FUTURES", "SWAP")
 
 
-def list_instruments(inst_type, inst_family=None):
+async def list_instruments(inst_type, inst_family=None):
     """Alle handelbaren Kontrakte einer Gattung."""
-    return _get("/api/v5/public/instruments", instType=inst_type,
+    return await _get("/api/v5/public/instruments", instType=inst_type,
                 instFamily=inst_family)
 
 
@@ -167,7 +203,7 @@ def _score(cand_id, symbol):
     return score
 
 
-def resolve_instrument(symbol):
+async def resolve_instrument(symbol):
     """Sucht den API-Bezeichner zum Namen aus der CSV.
 
     OKX verwendet in Exportdateien nicht zwingend dieselbe Schreibweise wie in
@@ -178,7 +214,7 @@ def resolve_instrument(symbol):
     errors, candidates = [], []
     for inst_type in INST_TYPES:
         try:
-            for d in list_instruments(inst_type):
+            for d in await list_instruments(inst_type):
                 iid = d.get("instId") or ""
                 sc = _score(iid, symbol)
                 if sc > 0:
@@ -195,13 +231,13 @@ def resolve_instrument(symbol):
     return None, candidates[:8]
 
 
-def search_instruments(query, limit=25):
+async def search_instruments(query, limit=25):
     """Freitextsuche über alle Kontrakte, fuer die Auswahl von Hand."""
     q = (query or "").upper()
     out = []
     for inst_type in INST_TYPES:
         try:
-            for d in list_instruments(inst_type):
+            for d in await list_instruments(inst_type):
                 iid = (d.get("instId") or "").upper()
                 if q in iid:
                     out.append({"instId": d.get("instId"), "instType": inst_type,
@@ -241,7 +277,7 @@ def liquidation_price(size, avg_entry, margin_balance, mmr,
 
 # --- Historische EUR-Kurse ------------------------------------------------
 
-def eur_rate_on(asset, day):
+async def eur_rate_on(asset, day):
     """Tagesschlusskurs asset/EUR von OKX. None, wenn es das Paar nicht gibt
     oder der Tag nicht abgedeckt ist."""
     if asset == "EUR":
@@ -253,8 +289,8 @@ def eur_rate_on(asset, day):
 
     for inst, invert in ((f"{asset}-EUR", False), (f"EUR-{asset}", True)):
         try:
-            data = _get("/api/v5/market/history-candles", instId=inst,
-                        bar="1D", after=str(after), limit="1")
+            data = await _get("/api/v5/market/history-candles", instId=inst,
+                              bar="1D", after=str(after), limit="1")
         except MarketError:
             continue
         if not data:
@@ -268,7 +304,7 @@ def eur_rate_on(asset, day):
 
 # --- Gesamtbild ------------------------------------------------------------
 
-def snapshot(position, inst_id=None, inst_type=None):
+async def snapshot(position, inst_id=None, inst_type=None):
     """Reichert eine importierte Position mit Live-Daten an. Sammelt Fehler,
     statt beim ersten Problem abzubrechen - eine halbe Auskunft ist besser
     als gar keine, solange klar ist, welche Haelfte fehlt."""
@@ -277,7 +313,7 @@ def snapshot(position, inst_id=None, inst_type=None):
 
     if not inst_id:
         try:
-            match, cands = resolve_instrument(csv_symbol)
+            match, cands = await resolve_instrument(csv_symbol)
             if match:
                 inst_id, inst_type = match["instId"], match["instType"]
                 out["resolvedTo"] = inst_id
@@ -300,7 +336,7 @@ def snapshot(position, inst_id=None, inst_type=None):
 
     info = None
     try:
-        info = instrument(inst_id, inst_type)
+        info = await instrument(inst_id, inst_type)
         out["ctVal"] = str(info["ctVal"])
         out["settleCcy"] = info["settleCcy"]
         out["expTime"] = info["expTime"]
@@ -314,13 +350,13 @@ def snapshot(position, inst_id=None, inst_type=None):
 
     mark = None
     try:
-        mark = mark_price(inst_id, inst_type)
+        mark = await mark_price(inst_id, inst_type)
         out["markPrice"] = str(mark)
     except MarketError as exc:
         out["errors"].append(f"Mark-Preis: {exc}")
 
     try:
-        out["lastPrice"] = str(last_price(inst_id))
+        out["lastPrice"] = str(await last_price(inst_id))
     except MarketError as exc:
         out["errors"].append(f"Kurs: {exc}")
 
@@ -339,7 +375,7 @@ def snapshot(position, inst_id=None, inst_type=None):
     mmr, tier = None, None
     if info and info.get("instFamily") and mark:
         try:
-            mmr, tier = maintenance_margin_rate(
+            mmr, tier = await maintenance_margin_rate(
                 info["instFamily"], size * mark, inst_type)
             out["mmr"] = str(mmr)
             out["mmrTier"] = tier

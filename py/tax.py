@@ -85,7 +85,7 @@ def rates_from_own_trades(conn):
     return found
 
 
-def build_rate_lookup(conn, assets, days, fetcher=None):
+async def build_rate_lookup(conn, assets, days, fetcher=None):
     """Baut eine Kurstabelle. fetcher(asset, day) darf None liefern."""
     own = rates_from_own_trades(conn)
     table, missing, sources = {}, set(), {}
@@ -102,7 +102,7 @@ def build_rate_lookup(conn, assets, days, fetcher=None):
                 continue
             if fetcher:
                 try:
-                    r = fetcher(asset, day)
+                    r = await fetcher(asset, day)
                 except Exception:
                     r = None
                 if r is not None:
@@ -330,11 +330,11 @@ def dec2str(o):
     return o
 
 
-def build_report(conn, fetcher=None):
+async def build_report(conn, fetcher=None):
     assets = [r[0] for r in conn.execute("SELECT DISTINCT asset FROM entries")]
     days = [r[0] for r in conn.execute(
         "SELECT DISTINCT substr(ts_utc,1,10) FROM transactions")]
-    table, missing_rates, sources = build_rate_lookup(conn, assets, days, fetcher)
+    table, missing_rates, sources = await build_rate_lookup(conn, assets, days, fetcher)
 
     disposals, open_lots, warn = build_lots(conn, table)
     p20, m20 = flat_bucket(conn, "par20", table)
@@ -392,6 +392,8 @@ def build_report(conn, fetcher=None):
                 "byKind": e20["by_kind"] if e20 else {},
                 "count": len(rows20),
                 "unpriced": e20["unpriced"] if e20 else 0,
+                "allUnpriced": bool(e20) and e20["unpriced"] > 0
+                              and e20["unpriced"] == e20["rows"],
                 "rows": rows20,
             },
             "par22": {
@@ -400,6 +402,9 @@ def build_report(conn, fetcher=None):
                 "resultAfterCarry": sum22_after,
                 "native": e22["native"] if e22 else {},
                 "count": len(rows22),
+                "unpriced": e22["unpriced"] if e22 else 0,
+                "allUnpriced": bool(e22) and e22["unpriced"] > 0
+                              and e22["unpriced"] == e22["rows"],
                 "freigrenze": FREIGRENZE_22,
                 "exceeded": sum22_after > FREIGRENZE_22,
                 "taxable": sum22_after if sum22_after > FREIGRENZE_22 else Decimal(0),
@@ -425,12 +430,12 @@ def build_report(conn, fetcher=None):
 
 # --- Portfolio fuer das Dashboard ------------------------------------------
 
-def portfolio(conn, positions=None, fetcher=None):
+async def portfolio(conn, positions=None, fetcher=None):
     """Bewertet die Bestaende in EUR und stellt sie dem Eingezahlten gegenueber."""
     today = datetime.now(timezone.utc).date().isoformat()
     balances = L.balances(conn)
     assets = list(balances)
-    table, missing, sources = build_rate_lookup(conn, assets, [today], fetcher)
+    table, missing, sources = await build_rate_lookup(conn, assets, [today], fetcher)
 
     # In Margin gebunden vs. frei verfuegbar
     in_margin = {}
@@ -509,7 +514,7 @@ def fees_summary(conn):
 
 # --- Kapitalkurve ------------------------------------------------------------
 
-def capital_curve(conn, fetcher=None, points=24):
+async def capital_curve(conn, fetcher=None, points=24):
     """Portfoliowert (Ledger-Bestand, ohne laufende Position live bewertet)
     an bis zu `points` gleichmaessig verteilten Tagen zwischen erster und
     letzter Buchung. Fuer die aktuell offene Position zaehlt hier nur der
@@ -533,7 +538,7 @@ def capital_curve(conn, fetcher=None, points=24):
         days.append(end.date().isoformat())
 
     assets = [r[0] for r in conn.execute("SELECT DISTINCT asset FROM entries")]
-    table, missing, sources = build_rate_lookup(conn, assets, days, fetcher)
+    table, missing, sources = await build_rate_lookup(conn, assets, days, fetcher)
 
     out = []
     for day in days:
