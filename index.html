@@ -1,0 +1,1338 @@
+<!DOCTYPE html>
+<html lang="de" data-theme="dark">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Krypto-Tracker</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+:root[data-theme="dark"]{
+  color-scheme: dark;
+  --bg:#0A0D12; --panel:#12171F; --panel-2:#1A2029; --raise:#222A35;
+  --line:#232B36; --line-2:#2E3743;
+  --fg:#EDF0F4; --dim:#8A94A3; --faint:#5A6472;
+  --a23:#3FBF8F; --a20:#5B93F5; --a22:#E0B44E; --neutral:#6B7484; --alert:#F0714F;
+  --up:#3FBF8F; --down:#F0714F;
+  --shadow:0 1px 2px rgba(0,0,0,.3), 0 12px 28px -16px rgba(0,0,0,.55);
+  --chart-fill:.30;
+  --hero-grad:linear-gradient(160deg,#182430 0%,#12171F 55%);
+}
+:root[data-theme="light"]{
+  color-scheme: light;
+  --bg:#F4F6FB; --panel:#FFFFFF; --panel-2:#F7F8FC; --raise:#ECEFF7;
+  --line:#EBEEF5; --line-2:#DDE2EE;
+  --fg:#151A2B; --dim:#767E93; --faint:#A5ABBC;
+  --a23:#18B98A; --a20:#4A6CF0; --a22:#C98A1E; --neutral:#8E96A8; --alert:#E14A42;
+  --up:#18B98A; --down:#E14A42;
+  --shadow:0 1px 2px rgba(20,25,50,.04), 0 10px 24px -14px rgba(20,25,50,.14);
+  --chart-fill:.18;
+  --hero-grad:linear-gradient(160deg,#FFFFFF 0%,#ECF0FB 65%);
+}
+:root{
+  --mono:"JetBrains Mono",ui-monospace,"SF Mono",Menlo,monospace;
+  --sans:"Instrument Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;min-height:100%}
+html{background:var(--bg)}
+body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:14.5px;
+  line-height:1.55;-webkit-font-smoothing:antialiased;min-height:100vh;
+  transition:background .15s,color .15s}
+.wrap{max-width:1100px;margin:0 auto;padding:26px 20px 80px}
+.hidden{display:none!important}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+header{display:flex;justify-content:space-between;align-items:center;gap:18px;
+  flex-wrap:wrap;margin-bottom:20px}
+.brand{display:flex;align-items:center;gap:10px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--a23);
+  box-shadow:0 0 12px rgba(63,191,143,.6)}
+h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
+.hsub{font-family:var(--mono);font-size:10px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--faint)}
+.hmeta{font-family:var(--mono);font-size:11px;color:var(--dim);text-align:right}
+
+.tabs{display:flex;gap:2px;background:var(--panel);padding:4px;border-radius:12px;
+  border:1px solid var(--line);margin-bottom:20px;overflow-x:auto}
+.tab{flex:1;min-width:98px;padding:9px 12px;border:none;background:none;color:var(--dim);
+  font-family:var(--sans);font-size:13.5px;font-weight:500;border-radius:8px;
+  cursor:pointer;white-space:nowrap;transition:.15s}
+.tab:hover{color:var(--fg);background:rgba(255,255,255,.03)}
+.tab[aria-selected="true"]{background:var(--raise);color:var(--fg)}
+.tab:focus-visible{outline:2px solid var(--a20);outline-offset:1px}
+
+.card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  overflow:hidden;box-shadow:var(--shadow);transition:background .15s,border-color .15s}
+.card+.card,.grid+.card,.card+.grid{margin-top:12px}
+
+/* Theme-Umschalter */
+.themetoggle{display:flex;align-items:center;background:var(--panel);
+  border:1px solid var(--line);border-radius:99px;padding:3px;gap:2px;box-shadow:var(--shadow)}
+.themetoggle button{border:none;background:none;padding:6px 11px;border-radius:99px;
+  font-family:var(--sans);font-size:11.5px;font-weight:600;color:var(--faint);cursor:pointer}
+.themetoggle button.on{background:var(--raise);color:var(--fg)}
+
+/* Kapitalkurve */
+.curvewrap{margin-top:14px;position:relative;cursor:crosshair}
+.curvesvg{width:100%;height:74px;display:block}
+.curvesvg path.line{fill:none;stroke:var(--a20);stroke-width:2.2;
+  stroke-linecap:round;stroke-linejoin:round}
+.curvesvg path.fill{fill:var(--a20);opacity:var(--chart-fill)}
+.curve-crosshair{position:absolute;top:0;width:1px;height:74px;background:var(--line-2);
+  pointer-events:none}
+.curve-crosshair i{position:absolute;left:-3.5px;width:7px;height:7px;border-radius:50%;
+  background:var(--a20);box-shadow:0 0 0 2px var(--panel)}
+.curve-tip{position:absolute;transform:translate(-50%,0);
+  background:var(--raise);border:1px solid var(--line-2);border-radius:8px;
+  padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap;
+  pointer-events:none;box-shadow:var(--shadow);z-index:2}
+.curve-tip .d{color:var(--faint);font-size:9.5px;display:block;margin-bottom:1px;
+  letter-spacing:.03em}
+
+/* Pruefen-Tab (unklare Buchungen) */
+.rvrow{padding:14px 20px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;
+  gap:10px 16px;align-items:center}
+.rvrow:first-child{border-top:none}
+.rvinfo{flex:1 1 220px;min-width:0}
+.rvctl{display:flex;gap:8px;align-items:center;flex:0 0 auto}
+.rvctl select{background:var(--panel-2);border:1px solid var(--line);color:var(--fg);
+  border-radius:8px;padding:7px 10px;font-family:var(--sans);font-size:12.5px}
+.rvctl button{background:var(--a20);border:none;color:#fff;border-radius:8px;
+  padding:7px 12px;font-size:12.5px;font-weight:600;cursor:pointer}
+.rvctl button:disabled{opacity:.4;cursor:default}
+.tabbadge{display:inline-block;min-width:16px;padding:0 5px;margin-left:6px;
+  border-radius:99px;background:var(--alert);color:#fff;font-size:10px;
+  font-weight:700;line-height:16px;text-align:center;font-family:var(--mono)}
+
+/* Verlustvortrag */
+.carryrow{display:flex;gap:10px;align-items:center;padding:12px 20px;
+  border-top:1px solid var(--line);flex-wrap:wrap}
+.carryrow:first-child{border-top:none}
+.carryrow label{flex:1 1 160px;font-size:13px}
+.carryrow input{width:120px;background:var(--panel-2);border:1px solid var(--line);
+  color:var(--fg);border-radius:8px;padding:7px 10px;font-family:var(--mono);font-size:13px}
+.carryrow button{background:var(--raise);border:1px solid var(--line-2);color:var(--fg);
+  border-radius:8px;padding:7px 12px;font-size:12px;cursor:pointer}
+.carrysaved{font-size:11px;color:var(--up);margin-left:4px}
+.pad{padding:18px 20px}
+.ch{display:flex;justify-content:space-between;align-items:center;gap:14px;
+  padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.ct{font-size:14.5px;font-weight:600}
+.eyebrow{font-family:var(--mono);font-size:10px;letter-spacing:.14em;
+  text-transform:uppercase;color:var(--faint)}
+.sect{font-family:var(--mono);font-size:10px;letter-spacing:.15em;
+  text-transform:uppercase;color:var(--faint);margin:24px 0 10px}
+
+/* Hero */
+.hero{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start;
+  background:var(--hero-grad);box-shadow:var(--shadow);
+  border:1px solid var(--line);border-radius:14px;padding:24px 22px}
+.hero-l{flex:1 1 260px;min-width:0}
+.hero-v{font-family:var(--mono);font-size:38px;font-weight:600;letter-spacing:-.045em;
+  line-height:1.1;margin:6px 0 4px;font-variant-numeric:tabular-nums}
+.hero-sub{font-size:13px;color:var(--dim)}
+.delta{font-family:var(--mono);font-size:13px;font-weight:500;padding:2px 8px;
+  border-radius:6px;display:inline-block}
+.delta.up{background:rgba(63,191,143,.13);color:var(--up)}
+.delta.down{background:rgba(240,113,79,.13);color:var(--down)}
+.hero-r{flex:1 1 300px;min-width:0}
+.alloc{display:flex;height:9px;border-radius:5px;overflow:hidden;background:var(--line);
+  margin-bottom:14px}
+.alloc i{display:block;height:100%}
+.legend{display:flex;flex-direction:column;gap:9px}
+.lrow{display:flex;align-items:center;gap:9px;font-size:13px}
+.swatch{width:9px;height:9px;border-radius:3px;flex:none}
+.lname{font-weight:500}
+.lval{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--dim);
+  font-variant-numeric:tabular-nums}
+.lsplit{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+
+/* Kacheln */
+.grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+.tile{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:16px 18px}
+.tile-k{font-family:var(--mono);font-size:10px;letter-spacing:.12em;
+  text-transform:uppercase;color:var(--faint);margin-bottom:7px}
+.tile-v{font-family:var(--mono);font-size:21px;font-weight:500;letter-spacing:-.035em;
+  font-variant-numeric:tabular-nums}
+.tile-v.up{color:var(--up)} .tile-v.down{color:var(--down)}
+.tile-s{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:4px}
+
+/* Status */
+.status{display:flex;align-items:center;gap:12px;padding:14px 20px}
+.badge{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;
+  font-size:13px;font-weight:700;flex:none}
+.badge.ok{background:rgba(63,191,143,.14);color:var(--up)}
+.badge.bad{background:rgba(240,113,79,.14);color:var(--down)}
+.badge.neu{background:rgba(107,116,132,.16);color:var(--dim)}
+.st-t{font-size:14px;font-weight:600}
+.st-s{font-size:12.5px;color:var(--dim)}
+.recon-row{display:grid;grid-template-columns:70px 1fr 110px;gap:12px;align-items:center;
+  padding:8px 20px;border-top:1px solid var(--line)}
+.rtrack{position:relative;height:14px}
+.rtrack::before{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;
+  background:var(--line-2)}
+.rbar{position:absolute;top:4px;height:6px;border-radius:3px;background:var(--down)}
+.rdot{position:absolute;left:50%;top:4px;width:6px;height:6px;margin-left:-3px;
+  border-radius:50%;background:var(--up)}
+
+/* Positionen */
+.stats{display:flex;flex-wrap:wrap}
+.stat{flex:1 1 150px;padding:14px 18px;border-left:1px solid var(--line);
+  border-top:1px solid var(--line)}
+.stat:first-child{border-left:none}
+.liq{padding:16px 20px;border-top:1px solid var(--line)}
+.liqtop{display:flex;justify-content:space-between;gap:18px;flex-wrap:wrap;
+  align-items:flex-end}
+.liqbig{font-family:var(--mono);font-size:22px;font-weight:500;letter-spacing:-.035em}
+.liqtrack{position:relative;height:7px;border-radius:4px;margin:30px 0 26px;
+  background:linear-gradient(90deg,var(--down) 0%,#8A6B4A 42%,var(--line-2) 100%)}
+.pin{position:absolute;top:-5px;bottom:-5px;width:2px;border-radius:2px;background:var(--fg)}
+.pin span{position:absolute;top:-17px;transform:translateX(-50%);font-family:var(--mono);
+  font-size:9.5px;white-space:nowrap;color:var(--dim)}
+.pin.e{background:var(--faint)} .pin.l{background:var(--down)}
+.pin.n span{top:auto;bottom:-16px;color:var(--fg)}
+.axis{display:flex;justify-content:space-between;font-family:var(--mono);font-size:10px;
+  color:var(--faint)}
+
+/* Steuer */
+.taxgrid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(240px,1fr))}
+.taxcard{background:var(--panel);border:1px solid var(--line);border-radius:14px;
+  padding:18px 20px;border-top:3px solid var(--neutral)}
+.taxcard[data-b="par23"]{border-top-color:var(--a23)}
+.taxcard[data-b="par20"]{border-top-color:var(--a20)}
+.taxcard[data-b="par22"]{border-top-color:var(--a22)}
+.tx-law{font-family:var(--mono);font-size:10.5px;color:var(--faint);letter-spacing:.05em}
+.tx-name{font-size:14px;font-weight:600;margin-top:2px}
+.tx-amount{font-family:var(--mono);font-size:27px;font-weight:600;letter-spacing:-.04em;
+  margin:12px 0 2px;font-variant-numeric:tabular-nums}
+.tx-breakdown{margin:10px 0 0}
+.tbd-row{display:flex;justify-content:space-between;font-family:var(--mono);font-size:12px;
+  color:var(--dim);padding:2px 0}
+.tbd-row.down{color:var(--down)}
+.tbd-row.total{border-top:1px solid var(--line);margin-top:3px;padding-top:5px;
+  color:var(--fg);font-weight:600}
+.fg-bar{height:5px;border-radius:3px;background:var(--line);overflow:hidden;margin:12px 0 6px}
+.fg-bar i{display:block;height:100%;background:var(--a23);border-radius:3px}
+.fg-bar.over i{background:var(--alert)}
+.tx-hint{font-size:12.5px;color:var(--dim)}
+.lot{display:grid;grid-template-columns:1fr 120px 150px;gap:14px;align-items:center;
+  padding:12px 20px;border-top:1px solid var(--line)}
+.lotbar{height:5px;border-radius:3px;background:var(--line);overflow:hidden}
+.lotbar i{display:block;height:100%;background:linear-gradient(90deg,var(--a20),var(--a23))}
+.years{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
+.ychip{padding:5px 13px;border-radius:99px;border:1px solid var(--line-2);background:none;
+  color:var(--dim);font-family:var(--mono);font-size:12.5px;cursor:pointer}
+.ychip[aria-pressed="true"]{background:var(--fg);border-color:var(--fg);color:var(--bg)}
+
+/* Transaktionen */
+.filters{display:flex;gap:7px;flex-wrap:wrap;padding:12px 20px;
+  border-bottom:1px solid var(--line);align-items:center}
+.chip{padding:5px 11px;border-radius:99px;border:1px solid var(--line-2);background:none;
+  color:var(--dim);font-family:var(--sans);font-size:12.5px;cursor:pointer;transition:.15s}
+.chip:hover{border-color:var(--faint);color:var(--fg)}
+.chip[aria-pressed="true"]{background:var(--fg);border-color:var(--fg);color:var(--bg);
+  font-weight:500}
+.search{margin-left:auto;font-family:var(--mono);font-size:12.5px;padding:6px 11px;
+  border-radius:8px;border:1px solid var(--line-2);background:var(--bg);color:var(--fg);
+  min-width:150px}
+.row{display:grid;grid-template-columns:100px 1fr auto;gap:14px;align-items:center;
+  padding:11px 20px;border-top:1px solid var(--line)}
+.row:hover{background:var(--panel-2)}
+.when{font-family:var(--mono);font-size:11px;color:var(--faint)}
+.what{min-width:0}
+.title{font-size:13.5px;font-weight:500;display:flex;align-items:center;gap:8px;
+  flex-wrap:wrap}
+.tag{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;padding:2px 6px;
+  border-radius:5px}
+.tag[data-b="par23"]{background:rgba(63,191,143,.14);color:var(--a23)}
+.tag[data-b="par20"]{background:rgba(91,147,245,.14);color:var(--a20)}
+.tag[data-b="par22"]{background:rgba(224,180,78,.14);color:var(--a22)}
+.tag[data-b="neutral"]{background:rgba(107,116,132,.16);color:var(--neutral)}
+.tag[data-b="unknown"]{background:rgba(240,113,79,.14);color:var(--alert)}
+.note-s{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:2px;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.amt{text-align:right;font-family:var(--mono);font-size:12.5px;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.amt i{display:block;font-style:normal}
+.amt i.pos{color:var(--up)} .amt i.neg{color:var(--down)}
+.amt i.fee{color:var(--faint);font-size:11px}
+.more{display:flex;justify-content:center;padding:14px}
+
+/* Sonstiges */
+.drop{border:1.5px dashed var(--line-2);border-radius:14px;background:var(--panel);
+  padding:32px 22px;text-align:center;cursor:pointer;transition:.15s}
+.drop:hover,.drop.over{border-color:var(--a20);background:var(--panel-2)}
+.drop-t{font-size:14.5px;font-weight:600}
+.drop-h{font-size:13px;color:var(--dim);margin-top:5px;max-width:52ch;margin-inline:auto}
+.kv{display:flex;gap:20px;flex-wrap:wrap;font-family:var(--mono);font-size:12px;
+  padding:14px 20px;color:var(--dim)}
+.kv b{color:var(--fg);font-weight:500}
+.note{font-size:12.5px;color:var(--faint);padding:0 20px 14px;max-width:76ch}
+.warn{margin:0 20px 14px;background:rgba(240,113,79,.09);
+  border:1px solid rgba(240,113,79,.32);border-radius:10px;padding:11px 13px;
+  font-size:12.5px;color:var(--fg)}
+.warn b{display:block;color:var(--alert);margin-bottom:3px;font-size:12px}
+.empty{text-align:center;padding:54px 24px}
+.empty h3{font-size:17px;font-weight:600;margin:0 0 7px}
+.empty p{color:var(--dim);max-width:48ch;margin:0 auto 18px;font-size:13.5px}
+button.act{padding:8px 15px;border-radius:9px;border:1px solid var(--line-2);
+  background:var(--panel-2);color:var(--fg);font-family:var(--sans);font-size:13px;
+  font-weight:500;cursor:pointer;transition:.15s}
+button.act:hover{border-color:var(--faint);background:var(--raise)}
+button.act:focus-visible{outline:2px solid var(--a20);outline-offset:1px}
+button.act.primary{background:var(--fg);color:var(--bg);border-color:var(--fg)}
+button.act.primary:hover{opacity:.88}
+button.act.warnish:hover{border-color:var(--alert);color:var(--alert)}
+.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:28px;padding-top:18px;
+  border-top:1px solid var(--line)}
+.spacer{margin-left:auto}
+input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radius:8px;
+  border:1px solid var(--line-2);background:var(--bg);color:var(--fg);width:110px}
+@media (prefers-reduced-motion:reduce){*{transition:none!important}}
+@media (max-width:640px){
+  .row{grid-template-columns:1fr auto;gap:7px}
+  .when{grid-column:1/-1}
+  .lot{grid-template-columns:1fr;row-gap:6px}
+  .hero-v{font-size:31px}
+  .search{margin-left:0;width:100%}
+}
+
+/* Druckansicht: nur der Steuerreport, hell und ohne Bedienelemente */
+@media print{
+  body{background:#fff;color:#111}
+  .tabs,.actions,header .hmeta,.noprint,button{display:none!important}
+  .wrap{max-width:none;padding:0}
+  .card,.tile,.taxcard,.hero{background:#fff!important;border-color:#bbb!important;
+    break-inside:avoid}
+  .taxcard{border-top-width:3px}
+  .tx-amount,.hero-v,.tile-v{color:#111!important}
+  .note,.eyebrow,.tile-k,.tx-law{color:#555!important}
+  .dim,.st-s,.tx-hint{color:#333!important}
+  .print-head{display:block!important;margin-bottom:16px}
+  .lot,.row,.recon-row{border-color:#ddd!important}
+  .fg-bar{background:#e6e6e6!important}
+  .fg-bar i{background:#444!important}
+  .fg-bar.over i{background:#b03a20!important}
+  .lotbar{background:#e6e6e6!important} .lotbar i{background:#444!important}
+  .tag{border:1px solid #bbb;color:#333!important;background:none!important}
+}
+.print-head{display:none}
+</style>
+</head>
+<body>
+<div id="pyLoading" style="position:fixed;inset:0;z-index:999;display:flex;
+  align-items:center;justify-content:center;flex-direction:column;gap:14px;
+  background:var(--bg);color:var(--fg);font-family:var(--sans)">
+  <div style="width:34px;height:34px;border-radius:50%;border:3px solid var(--line);
+    border-top-color:var(--a20);animation:pyspin .8s linear infinite"></div>
+  <div style="font-size:13px;color:var(--dim)">Python-Laufzeit lädt (einmalig, danach schnell)…</div>
+  <style>@keyframes pyspin{to{transform:rotate(360deg)}}</style>
+</div>
+<div class="wrap">
+  <header>
+    <div class="brand">
+      <span class="dot"></span>
+      <div><h1>Krypto-Tracker</h1><div class="hsub">OKX</div></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:14px">
+      <div class="hmeta" id="meta"></div>
+      <div class="themetoggle noprint" id="themeToggle">
+        <button data-t="light">☀ Hell</button>
+        <button data-t="dark">☾ Dunkel</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" data-tab="dash" aria-selected="true">Übersicht</button>
+    <button class="tab" role="tab" data-tab="positions" aria-selected="false">Positionen</button>
+    <button class="tab" role="tab" data-tab="tx" aria-selected="false">Transaktionen</button>
+    <button class="tab" role="tab" data-tab="review" aria-selected="false">Prüfen<span class="tabbadge hidden" id="reviewBadge">0</span></button>
+    <button class="tab" role="tab" data-tab="tax" aria-selected="false">Steuer</button>
+    <button class="tab" role="tab" data-tab="import" aria-selected="false">Import</button>
+  </div>
+
+  <div id="panel"></div>
+
+  <div class="actions">
+    <button class="act" id="btnDemo">Beispieldaten</button>
+    <button class="act" id="btnReload">Neu laden</button>
+    <button class="act warnish" id="btnReset">Alles löschen</button>
+    <button class="act spacer" id="btnQuit">Programm beenden</button>
+  </div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c =>
+  ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const N = v => Number(v);
+const nf = (v,d=2) => N(v).toLocaleString("de-DE",
+  {minimumFractionDigits:d, maximumFractionDigits:d});
+const eur = v => v == null ? "–" : nf(v) + " €";
+const nfx = v => N(v).toLocaleString("de-DE",
+  {minimumFractionDigits:2, maximumFractionDigits: Math.abs(N(v)) < 1 ? 8 : 2});
+const sgn = v => (N(v) >= 0 ? "+" : "") + nf(v);
+const day = s => s ? s.slice(0,10).split("-").reverse().join(".") : "–";
+const dtm = s => s ? day(s) + " " + s.slice(11,16) : "–";
+const plural = (n,a,b) => `${n} ${n===1?a:b}`;
+
+const COL = {par23:"var(--a23)", par20:"var(--a20)", par22:"var(--a22)",
+  neutral:"var(--neutral)", unknown:"var(--alert)"};
+const ASSETCOL = ["#5B93F5","#3FBF8F","#E0B44E","#B77BE8","#F0714F","#4FC3D9"];
+const B = {
+  par23:{n:"Private Veräußerungsgeschäfte",l:"§ 23 EStG",s:"§ 23",
+    d:"Krypto-Verkäufe und Tauschvorgänge. Nach einem Jahr Haltedauer steuerfrei."},
+  par20:{n:"Termingeschäfte",l:"§ 20 EStG",s:"§ 20",
+    d:"Futures-Ergebnis, Handelsgebühren und Finanzierungsraten, saldiert. Anlage KAP."},
+  par22:{n:"Sonstige Einkünfte",l:"§ 22 Nr. 3 EStG",s:"§ 22",
+    d:"Earn-Prämien, Zinsen und ähnliche Gutschriften."},
+  neutral:{n:"Steuerlich neutral",l:"kein Steuerereignis",s:"neutral",
+    d:"Ein- und Auszahlungen sowie Umbuchungen zwischen eigenen Konten."},
+  unknown:{n:"Nicht zugeordnet",l:"muss geklärt werden",s:"offen",
+    d:"Blockiert den Report. Unvollständige Zahlen sind schlimmer als keine."},
+};
+const TXL = {deposit:"Einzahlung",withdrawal:"Auszahlung",transfer:"Umbuchung",
+  trade_spot:"Tausch",trade_derivative:"Futures",funding_fee:"Finanzierungsrate",
+  fee:"Gebühr",earn_reward:"Earn-Gutschrift",adjustment:"Korrektur"};
+const ORDER = ["unknown","par23","par20","par22","neutral"];
+
+let STATE=null, MARKET=null, PF=null, TAXR=null, CURVE=null, FEES=null, TAB="dash", YEAR=null;
+let TXQ={bucket:"",q:"",offset:0,limit:60}, TXD=null;
+
+/* ================= Theme ================= */
+function applyTheme(t){
+  document.documentElement.setAttribute("data-theme", t);
+  document.querySelectorAll("#themeToggle button").forEach(b=>
+    b.classList.toggle("on", b.dataset.t===t));
+  try{ localStorage.setItem("theme", t); }catch(e){}
+}
+(function initTheme(){
+  let t = "dark";
+  try{ t = localStorage.getItem("theme") || "dark"; }catch(e){}
+  applyTheme(t);
+})();
+document.querySelectorAll("#themeToggle button").forEach(b=>
+  b.onclick = () => applyTheme(b.dataset.t));
+
+async function api(p,b){
+  // Ersetzt den frueheren fetch()-Aufruf: laeuft komplett im Browser via
+  // Pyodide, kein Server, keine Anfrage verlaesst das Geraet.
+  const method = b ? "POST" : "GET";
+  const resultJson = window.pyDispatch(method, p, b ? JSON.stringify(b) : "");
+  await window.pySync();
+  const result = JSON.parse(resultJson);
+  if(result.__error__) throw new Error(result.__error__);
+  return result;
+}
+
+function downloadBlob(bytes, mime, filename){
+  const blob = new Blob([bytes], {type: mime});
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  URL.revokeObjectURL(url);
+}
+
+/* ================= Übersicht ================= */
+
+// Das Ledger bucht die Positionsmargin zu ihrem eingezahlten Wert, nicht zu
+// ihrem aktuellen. Ohne diese Korrektur würde "Ergebnis gesamt" den
+// Papiergewinn der offenen Position schlicht ignorieren, obwohl er Teil des
+// tatsächlichen Vermögens gerade jetzt ist. Wir ersetzen deshalb je
+// Bestandswährung den margin-gebundenen Anteil durch margin + unrealisiertes
+// Ergebnis, sofern ein Live-Kurs vorliegt.
+function withPositionEquity(pf, positions, market){
+  if(!pf) return {holdings:[], totalEur:null, adjustedNote:null};
+  const holdings = pf.holdings.map(h => ({...h}));
+  let extra = 0, missing = 0, any = false;
+
+  (positions||[]).forEach((p,i) => {
+    const mk = (market||[])[i];
+    if(!mk || mk.unrealizedPnl == null){ if(mk) missing++; return; }
+    any = true;
+    const ccy = p.settle_ccy || "USDC";
+    const h = holdings.find(x => x.asset === ccy);
+    const rate = h && h.rate != null ? N(h.rate) : null;
+    if(rate == null){ missing++; return; }
+    const equityNative = N(p.margin_balance) + N(mk.unrealizedPnl);
+    const costNative = N(p.margin_balance);
+    const deltaEur = (equityNative - costNative) * rate;
+    extra += deltaEur;
+    if(h){ h.eur = (h.eur!=null?N(h.eur):0) + deltaEur; h.locked = equityNative; }
+  });
+
+  const totalEur = pf.totalEur != null ? N(pf.totalEur) + extra : null;
+  return {holdings, totalEur, unrealizedEur: any ? extra : null,
+    adjustedNote: any ? "inkl. laufender Position" : (missing ? "Positions-Ergebnis nicht abrufbar" : null)};
+}
+
+function dash(){
+  if(!STATE.hasData) return `<div class="card"><div class="empty">
+    <h3>Noch keine Daten</h3><p>Lies deine OKX-Exporte ein, oder sieh dir mit
+    Beispieldaten an, wie das Ergebnis aussieht.</p>
+    <button class="act primary" onclick="go('import')">Zum Import</button></div></div>`;
+
+  const adj = withPositionEquity(PF, STATE.positions, MARKET);
+  const total = adj.totalEur;
+  const dep = PF ? N(PF.depositedEur) : null;
+  const res = (total != null && dep != null) ? total - dep : null;
+  const pct = (res != null && dep) ? res / dep * 100 : null;
+
+  const hold = (adj.holdings || []).filter(h => h.eur != null && N(h.eur) > 0);
+  const sum = hold.reduce((a,h)=>a+N(h.eur),0) || 1;
+  const bar = hold.map((h,i)=>`<i style="width:${N(h.eur)/sum*100}%;
+    background:${ASSETCOL[i%ASSETCOL.length]}"></i>`).join("");
+  const legend = hold.map((h,i)=>`<div class="lrow">
+      <span class="swatch" style="background:${ASSETCOL[i%ASSETCOL.length]}"></span>
+      <span class="lname">${esc(h.asset)}</span>
+      <span class="lval">${eur(h.eur)} · ${nf(N(h.eur)/sum*100,1)} %</span>
+    </div>${N(h.locked)>0?`<div class="lsplit" style="margin:-4px 0 2px 18px">
+      ${nfx(h.free)} frei · ${nfx(h.locked)} in Position (Marktwert)</div>`:""}`).join("");
+
+  const pos = (STATE.positions||[])[0];
+  const mk = (MARKET||[])[0];
+  const upnl = mk && mk.unrealizedPnl != null ? N(mk.unrealizedPnl) : null;
+
+  const hero = `<div class="hero">
+    <div class="hero-l">
+      <div class="eyebrow">Portfoliowert</div>
+      <div class="hero-v">${PF ? eur(total) : "…"}</div>
+      ${res != null ? `<div class="hero-sub">
+        <span class="delta ${res>=0?"up":"down"}">${sgn(res)} €${
+          pct!=null?` · ${sgn(pct)} %`:""}</span>
+        <span style="margin-left:8px">gegenüber ${eur(dep)} eingezahlt</span></div>` : ""}
+      <div class="lsplit" style="margin-top:10px">${[
+        PF && PF.asOf ? `Bewertet zum ${day(PF.asOf)}` : "",
+        adj.adjustedNote
+      ].filter(Boolean).join(" · ")}</div>
+    </div>
+    <div class="hero-r">
+      <div class="eyebrow" style="margin-bottom:10px">Aufteilung</div>
+      <div class="alloc">${bar || '<i style="width:100%;background:var(--line)"></i>'}</div>
+      <div class="legend">${legend || '<div class="lrow">keine Bestände</div>'}</div>
+    </div>
+  </div>`;
+
+  const curveCard = curveCardHtml();
+
+  const latestY = (TAXR && TAXR.years && TAXR.years.length)
+    ? TAXR.years[TAXR.years.length-1] : null;
+  const realized = latestY ? N(latestY.par20.result) + N(latestY.par23.gain) : null;
+
+  const tiles = `<div class="grid" style="margin-top:12px">
+    <div class="tile"><div class="tile-k">Eingezahlt</div>
+      <div class="tile-v">${eur(dep)}</div>
+      <div class="tile-s">${plural(STATE.bucketTotals.neutral||0,"Vorgang","Vorgänge")}</div></div>
+    <div class="tile"><div class="tile-k">Ergebnis gesamt</div>
+      <div class="tile-v ${res>=0?"up":"down"}">${res!=null?sgn(res)+" €":"–"}</div>
+      <div class="tile-s">${pct!=null?sgn(pct)+" %":""}</div></div>
+    <div class="tile"><div class="tile-k">Realisiert${latestY?" "+latestY.year:""}</div>
+      <div class="tile-v ${realized>=0?"up":"down"}">${realized!=null?sgn(realized)+" €":"–"}</div>
+      <div class="tile-s">§20-Ergebnis + §23-Veräußerungsgewinn</div></div>
+    <div class="tile"><div class="tile-k">Unrealisiert</div>
+      <div class="tile-v ${(adj.unrealizedEur??upnl)>=0?"up":"down"}">${
+        adj.unrealizedEur!=null ? sgn(adj.unrealizedEur)+" €"
+        : upnl!=null ? sgn(upnl)+" "+esc(pos&&pos.settle_ccy||"") : "–"}</div>
+      <div class="tile-s">${upnl!=null
+        ? (adj.unrealizedEur!=null ? sgn(upnl)+" "+esc(pos&&pos.settle_ccy||"")+" · " : "")
+          + "bereits in Ergebnis gesamt"
+        : "Kurs fehlt"}</div></div>
+    <div class="tile"><div class="tile-k">Offene Position</div>
+      <div class="tile-v">${pos?nf(pos.size,4)+" "+esc(pos.base||""):"–"}</div>
+      <div class="tile-s" style="overflow:hidden;text-overflow:ellipsis">${
+        pos?esc(pos.instrument):"keine"}</div></div>
+  </div>`;
+
+  return hero + curveCard + tiles + feesCard() + statusCard() + recentCard();
+}
+
+/* --- Kapitalkurve ------------------------------------------------------- */
+
+function curveSvg(points){
+  if(!points || points.length < 2) return "";
+  const vals = points.map(p=>N(p.eur));
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = (max - min) || 1;
+  const W = 600, H = 74, pad = 4;
+  const stepX = W / (points.length - 1);
+  const pts = points.map((p,i) => {
+    const x = i * stepX;
+    const y = pad + (H - 2*pad) * (1 - (N(p.eur) - min) / range);
+    return [x, y];
+  });
+  const line = pts.map((p,i) => (i===0?"M":"L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
+  const fill = line + ` L${W},${H} L0,${H} Z`;
+  return `<svg class="curvesvg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
+    <path class="fill" d="${fill}"></path>
+    <path class="line" d="${line}"></path></svg>`;
+}
+
+function curveCardHtml(){
+  if(!CURVE) return `<div class="card" style="margin-top:12px"><div class="pad">
+    <div class="tile-k">Kapitalkurve</div><div class="note" style="padding:6px 0 0">Lädt…</div></div></div>`;
+  const pts = CURVE.points || [];
+  if(pts.length < 2) return "";
+  return `<div class="card" style="margin-top:12px">
+    <div class="ch"><span class="ct">Kapitalkurve</span>
+      <span class="eyebrow">${day(pts[0].day)} – ${day(pts[pts.length-1].day)}</span></div>
+    <div class="pad">
+      <div class="curvewrap" id="curveWrap">${curveSvg(pts)}
+        <div class="curve-crosshair hidden" id="curveCrosshair"><i></i></div>
+        <div class="curve-tip hidden" id="curveTip"></div>
+      </div>
+      <div class="tile-s" style="margin-top:6px">Netto-Bestand laut Ledger, ohne tagesaktuelles
+        Ergebnis der offenen Position (das steckt nur im heutigen Portfoliowert oben).${
+          CURVE.missingRatesCount ? ` Für ${CURVE.missingRatesCount} Tag/Asset-Kombinationen fehlte ein Kurs.` : ""
+        }</div>
+    </div></div>`;
+}
+
+function wireCurve(){
+  const wrap = $("#curveWrap");
+  if(!wrap || !CURVE || !CURVE.points || CURVE.points.length < 2) return;
+  const pts = CURVE.points;
+  const vals = pts.map(p => N(p.eur));
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = (max - min) || 1;
+  const H = 74, pad = 4;
+  const cross = $("#curveCrosshair"), tip = $("#curveTip");
+  const svgEl = wrap.querySelector("svg");
+  if(!svgEl) return;
+
+  function show(clientX){
+    const rect = svgEl.getBoundingClientRect();
+    if(!rect.width) return;
+    let rel = (clientX - rect.left) / rect.width;
+    rel = Math.min(1, Math.max(0, rel));
+    const idx = Math.round(rel * (pts.length - 1));
+    const p = pts[idx];
+    const xPct = (idx / (pts.length - 1)) * 100;
+    const yPx = pad + (H - 2*pad) * (1 - (N(p.eur) - min) / range);
+    cross.style.left = xPct + "%";
+    cross.querySelector("i").style.top = (yPx - 3.5) + "px";
+    cross.classList.remove("hidden");
+    tip.style.left = xPct + "%";
+    tip.style.top = "0px";
+    tip.innerHTML = `<span class="d">${day(p.day)}</span>${eur(p.eur)}`;
+    tip.classList.remove("hidden");
+  }
+  function hide(){ cross.classList.add("hidden"); tip.classList.add("hidden"); }
+
+  wrap.onmousemove = e => show(e.clientX);
+  wrap.onmouseleave = hide;
+  wrap.ontouchstart = wrap.ontouchmove = e => { if(e.touches[0]){ e.preventDefault(); show(e.touches[0].clientX); } };
+  wrap.ontouchend = hide;
+}
+
+/* --- Gebühren & Funding --------------------------------------------------- */
+
+function fmtAssetSum(d){
+  if(!d) return "–";
+  const keys = Object.keys(d).filter(k=>N(d[k])!==0);
+  if(!keys.length) return "–";
+  return keys.map(k=>nfx(d[k])+" "+esc(k)).join(" + ");
+}
+
+function feesCard(){
+  if(!FEES) return "";
+  const has = Object.keys(FEES.feesPaid||{}).length || Object.keys(FEES.fundingReceived||{}).length
+    || Object.keys(FEES.fundingPaid||{}).length;
+  if(!has) return "";
+  return `<div class="sect">Gebühren &amp; Funding</div><div class="card">
+    <div class="stats">
+      <div class="stat"><div class="tile-k">Gebühren gezahlt</div>
+        <div class="tile-v down" style="font-size:17px">${fmtAssetSum(FEES.feesPaid)}</div></div>
+      <div class="stat"><div class="tile-k">Funding erhalten</div>
+        <div class="tile-v up" style="font-size:17px">${fmtAssetSum(FEES.fundingReceived)}</div></div>
+      <div class="stat"><div class="tile-k">Funding gezahlt</div>
+        <div class="tile-v down" style="font-size:17px">${fmtAssetSum(FEES.fundingPaid)}</div></div>
+    </div></div>`;
+}
+
+function statusCard(){
+  const rec = STATE.reconciliation;
+  const unk = STATE.unknown||0;
+  if(!rec) return `<div class="sect">Abgleich</div><div class="card">
+    <div class="status"><span class="badge neu">?</span>
+      <div><div class="st-t">Noch nicht abgeglichen</div>
+      <div class="st-s">Trag ein, was OKX als Bestand anzeigt.</div></div></div>
+    <div class="kv" style="border-top:1px solid var(--line)">
+      <input class="mini" id="sA" placeholder="USDC" aria-label="Währung">
+      <input class="mini" id="sV" placeholder="1725.71" aria-label="Betrag laut OKX">
+      <button class="act" id="sB">Eintragen</button></div></div>`;
+
+  const bad = rec.filter(r=>!r.ok);
+  const max = Math.max(...rec.map(r=>Math.abs(N(r.diff))), 1e-12);
+  const rows = rec.map(r=>{const d=N(r.diff), w=Math.min(46,Math.abs(d)/max*42);
+    return `<div class="recon-row"><span class="mono" style="font-size:12.5px">${esc(r.asset)}</span>
+      <span class="rtrack">${r.ok?'<span class="rdot"></span>'
+        :`<span class="rbar" style="${d<0?"right:50%":"left:50%"};width:${w}%"></span>`}</span>
+      <span class="amt" style="color:${r.ok?"var(--dim)":"var(--down)"}">${
+        r.ok?"stimmt":nf(d,4)}</span></div>`;}).join("");
+
+  return `<div class="sect">Abgleich</div><div class="card">
+    <div class="status"><span class="badge ${bad.length||unk?"bad":"ok"}">${
+      bad.length||unk?"!":"✓"}</span>
+      <div><div class="st-t">${bad.length
+        ? plural(bad.length,"Abweichung","Abweichungen")
+        : unk ? plural(unk,"Vorgang ungeklärt","Vorgänge ungeklärt") : "Alles stimmt"}</div>
+      <div class="st-s">${bad.length
+        ? "Es fehlen Vorgänge oder sie sind falsch gebucht."
+        : unk ? "Diese Vorgänge blockieren den Steuerreport."
+        : `Ledger und OKX stimmen überein, Stand ${day(STATE.snapshotAt)}.`}</div></div>
+    </div>${rows}</div>`;
+}
+
+function recentCard(){
+  return `<div class="sect">Letzte Vorgänge</div>
+    <div class="card" id="recent"><div class="empty"><p>Lade…</p></div></div>`;
+}
+
+async function loadRecent(){
+  const el = $("#recent"); if(!el) return;
+  const d = await api("/api/transactions?limit=5");
+  el.innerHTML = d.items.map(rowHtml).join("") +
+    `<div class="more"><button class="act" onclick="go('tx')">Alle ${d.total} ansehen</button></div>`;
+}
+
+/* ================= Positionen ================= */
+
+function positions(){
+  const ps = STATE.positions||[];
+  if(!ps.length) return `<div class="card"><div class="empty">
+    <h3>Keine offene Position</h3><p>Positionen kommen aus der Trading History.
+    Fehlt eine, liegt sie vermutlich nach dem Enddatum deines Exports.</p>
+    <button class="act primary" onclick="go('import')">Zum Import</button></div></div>`;
+  return ps.map((p,i)=>posCard(p,(MARKET||[])[i])).join("");
+}
+
+function posCard(p, mk){
+  const live = mk && !mk.error;
+  const mark = live && mk.markPrice ? N(mk.markPrice) : null;
+  const upnl = live && mk.unrealizedPnl != null ? N(mk.unrealizedPnl) : null;
+  const entry = N(p.avg_entry), ccy = p.settle_ccy||"USDC";
+  const st=(k,v,s,c)=>`<div class="stat"><div class="tile-k">${k}</div>
+    <div class="tile-v ${c||""}">${v}</div>${s?`<div class="tile-s">${s}</div>`:""}</div>`;
+
+  const stats = st("Größe", nf(p.size,4)+" "+esc(p.base||""),
+      nf(p.contracts,0)+" Kontrakte")
+    + st("Ø Einstieg", nf(entry)+" USD")
+    + st("Mark-Preis", mark?nf(mark)+" USD":"–", mark?"live":"nicht abrufbar")
+    + st("Margin", nf(p.margin_balance)+" "+ccy, "inkl. "+nf(p.funding)+" Funding")
+    + st("Unrealisiert", upnl!=null?sgn(upnl)+" "+ccy:"–",
+        upnl!=null&&mk.returnOnMargin?sgn(mk.returnOnMargin)+" % auf Margin":"",
+        upnl==null?"":upnl>=0?"up":"down");
+
+  const single = live && mk.liquidationPrice ? N(mk.liquidationPrice) : null;
+  const range = mk && mk.liquidationRange ? mk.liquidationRange.map(N) : null;
+  const liq = single!=null ? single : (range?range[1]:null);
+  let liqB="";
+  if(liq){
+    const lo=liq*0.97, hi=Math.max(entry,mark||entry)*1.06;
+    const at=v=>Math.max(0,Math.min(100,(v-lo)/(hi-lo)*100));
+    const dist = mark ? (mark-liq)/mark*100 : null;
+    liqB=`<div class="liq"><div class="liqtop">
+      <div><div class="tile-k">Liquidation${single!=null?"":" (geschätzt)"}</div>
+        <div class="liqbig">${range&&single==null?nf(range[0])+" – "+nf(range[1]):nf(liq)}
+        <span style="font-size:12px;color:var(--faint)">USD</span></div></div>
+      ${dist!=null?`<div style="text-align:right"><div class="tile-k">Abstand</div>
+        <div class="liqbig">${nf(dist)} %</div>
+        <div class="tile-s">${nf(mark-liq)} USD</div></div>`:""}</div>
+      <div class="liqtrack">
+        <span class="pin l" style="left:${at(liq)}%"><span>Liquidation</span></span>
+        <span class="pin e" style="left:${at(entry)}%"><span>Einstieg</span></span>
+        ${mark?`<span class="pin n" style="left:${at(mark)}%"><span>jetzt</span></span>`:""}
+      </div><div class="axis"><span>${nf(lo)}</span><span>${nf(hi)}</span></div></div>
+      <div class="note">${esc(mk.liquidationBasis||"")} Näherung für Isolated Margin –
+        maßgeblich ist die Zahl in deiner OKX-Positionsansicht.</div>`;
+  }
+
+  const errs = (mk&&mk.errors&&mk.errors.length)
+    ? `<div class="warn"><b>Marktdaten unvollständig</b>${mk.errors.map(esc).join("<br>")}</div>`:"";
+  const picker = (mk&&mk.candidates) ? pickerHtml(p, mk.candidates) : "";
+
+  return `<div class="card"><div class="ch">
+      <div><div class="ct">${esc(p.instrument)}</div>
+        <div class="eyebrow">${p.side==="long"?"Long":"Short"} · Isolated</div></div>
+      <div class="mono" style="font-size:12px;color:var(--dim)">Stand ${day(p.as_of)}</div>
+    </div><div class="stats">${stats}</div>${liqB}${errs}${picker}</div>`;
+}
+
+function pickerHtml(p, cands){
+  return `<div class="liq"><div class="tile-k">Kontrakt zuordnen</div>
+    <div class="note" style="padding:6px 0 12px">Such den Kontrakt, den du handelst.
+      Die Zuordnung wird gespeichert.</div>
+    <div class="filters" style="padding:0;border:none">
+      <input class="search" style="margin:0" id="instq" value="${esc(p.base||"BTC")}">
+      <button class="act" id="instgo">Suchen</button></div>
+    <div id="instlist">${candList(cands,p.instrument)}</div></div>`;
+}
+function candList(items, symbol){
+  if(!items||!items.length) return `<div class="note" style="padding:10px 0">
+    Nichts gefunden. Anderen Suchbegriff probieren.</div>`;
+  return items.map(c=>`<div class="row" style="grid-template-columns:1fr auto">
+    <div class="what"><div class="title">${esc(c.instId)}</div>
+      <div class="note-s">${esc(c.instType)}${c.settleCcy?" · "+esc(c.settleCcy):""}${
+        c.ctVal?" · Kontrakt "+esc(c.ctVal):""}</div></div>
+    <div><button class="act" data-pick="${esc(c.instId)}" data-type="${esc(c.instType)}"
+      data-sym="${esc(symbol)}">Wählen</button></div></div>`).join("");
+}
+
+/* ================= Prüfen (unklare Buchungen) ================= */
+
+// CoinTracking nennt das "unklare Sachverhalte": Vorgänge, deren Herkunft
+// oder Zuordnung der Importer nicht automatisch erkennen konnte. Statt sie
+// irgendwie zu verbuchen, landen sie hier zur manuellen Entscheidung - und
+// bleiben so lange als "unknown" markiert und blockieren den Steuerreport.
+let REVIEWD = null;
+
+const BUCKET_OPTS = ["par23","par20","par22","neutral","unknown"];
+const TYPE_OPTS = ["deposit","withdrawal","transfer","trade_spot","trade_derivative",
+  "funding_fee","fee","earn_reward","adjustment"];
+
+function reviewPanel(){
+  return `<div class="card" id="reviewCard"><div class="empty"><p>Lade…</p></div></div>`;
+}
+
+async function loadReview(){
+  const el = $("#reviewCard"); if(!el) return;
+  REVIEWD = await api("/api/transactions?bucket=unknown&limit=200");
+  if(!REVIEWD.items.length){
+    el.outerHTML = `<div class="card"><div class="empty">
+      <h3>Nichts zu prüfen</h3><p>Aktuell ist jede Buchung einem Steuertopf zugeordnet.</p></div></div>`;
+    return;
+  }
+  el.outerHTML = `<div class="card" id="reviewCard">
+    <div class="ch"><span class="ct">Unklare Buchungen</span>
+      <span class="eyebrow">${REVIEWD.total} offen</span></div>
+    ${REVIEWD.items.map(reviewRow).join("")}
+  </div>`;
+  wireReview();
+}
+
+function reviewRow(t){
+  const amts = t.entries.map(e=>`${nfx(e.amount)} ${esc(e.asset)}`).join(" · ");
+  return `<div class="rvrow" data-id="${t.id}">
+    <div class="rvinfo">
+      <div class="title">${esc(TXL[t.tx_type]||t.tx_type)} <span class="mono" style="color:var(--faint);font-size:11px">${dtm(t.ts_utc)}</span></div>
+      <div class="note-s">${esc(t.note||"")} ${t.note?"·":""} ${amts}</div>
+    </div>
+    <div class="rvctl">
+      <select class="rv-bucket">${BUCKET_OPTS.map(b=>
+        `<option value="${b}" ${b==="unknown"?"selected":""}>${esc((B[b]||{}).s||b)}</option>`).join("")}</select>
+      <select class="rv-type">${TYPE_OPTS.map(ty=>
+        `<option value="${ty}" ${ty===t.tx_type?"selected":""}>${esc(TXL[ty]||ty)}</option>`).join("")}</select>
+      <button class="rv-save">Übernehmen</button>
+    </div>
+  </div>`;
+}
+
+function wireReview(){
+  document.querySelectorAll(".rvrow").forEach(row=>{
+    const id = +row.dataset.id;
+    const btn = row.querySelector(".rv-save");
+    btn.onclick = async () => {
+      const bucket = row.querySelector(".rv-bucket").value;
+      const tx_type = row.querySelector(".rv-type").value;
+      btn.disabled = true; btn.textContent = "…";
+      try{
+        const r = await api("/api/tx-update", {id, tax_bucket: bucket, tx_type});
+        STATE = r.state; PF = TAXR = null;
+        row.remove();
+        updateReviewBadge();
+        if(!document.querySelectorAll(".rvrow").length){
+          $("#reviewCard").outerHTML = `<div class="card"><div class="empty">
+            <h3>Nichts mehr zu prüfen</h3><p>Alle Buchungen sind jetzt zugeordnet.</p></div></div>`;
+        }
+        refreshDerived();
+      }catch(e){
+        btn.disabled = false; btn.textContent = "Übernehmen";
+        alert("Das hat nicht geklappt: " + (e.message||e));
+      }
+    };
+  });
+}
+
+function updateReviewBadge(){
+  const b = $("#reviewBadge"); if(!b) return;
+  const n = STATE ? (STATE.unknown||0) : 0;
+  b.textContent = n;
+  b.classList.toggle("hidden", n === 0);
+}
+
+/* ================= Steuer ================= */
+
+function taxPanel(){
+  if(!TAXR) return `<div class="card"><div class="empty"><p>Berechne…</p></div></div>`;
+  if(!TAXR.years.length) return `<div class="card"><div class="empty">
+    <h3>Nichts zu berechnen</h3><p>Es sind noch keine Vorgänge erfasst.</p></div></div>`;
+
+  const years = TAXR.years.map(y=>y.year);
+  if(YEAR == null || !years.includes(YEAR)) YEAR = years[years.length-1];
+  const y = TAXR.years.find(v=>v.year===YEAR);
+
+  const blockers = [];
+  if(TAXR.unknownCount) blockers.push(
+    `${plural(TAXR.unknownCount,"Vorgang ist","Vorgänge sind")} keinem Steuertopf
+     zugeordnet.`);
+  if(TAXR.missingRatesCount) blockers.push(
+    `Für ${TAXR.missingRatesCount} Positionen fehlt ein EUR-Kurs: ${
+      TAXR.missingRates.slice(0,4).join(", ")}${TAXR.missingRatesCount>4?" …":""}`);
+  (TAXR.warnings||[]).slice(0,3).forEach(w=>blockers.push(w));
+
+  const g23 = N(y.par23.gain), fg23 = N(y.par23.freigrenze);
+  const r20 = N(y.par20.result);
+  const r22 = N(y.par22.result), fg22 = N(y.par22.freigrenze);
+
+  const c23in = N(y.par23.lossCarryIn);
+  const c20in = N(y.par20.lossCarryIn);
+  const c22in = N(y.par22.lossCarryIn);
+
+  // Ein Verlustvortrag kann nur positive Einkünfte verrechnen - er darf das
+  // Ergebnis nie unter 0 drücken (das waere eine negative Steuer). Reicht
+  // der Vortrag nicht aus, bleibt ein Rest fuer Folgejahre uebrig (wird
+  // hier nur angezeigt, nicht automatisch fortgeschrieben). Ein echter
+  // Verlust des laufenden Jahres selbst (gross <= 0) bleibt sichtbar, statt
+  // ihn zu verstecken - da wird auch nichts vom Vortrag verbraucht.
+  function carryCalc(gross, carryIn, floorAlways){
+    const usedCarry = gross > 0 ? Math.min(carryIn, gross) : 0;
+    const remainingCarry = carryIn - usedCarry;
+    const headline = floorAlways ? Math.max(0, gross - usedCarry)
+                                  : (gross > 0 ? gross - usedCarry : gross);
+    return {usedCarry, remainingCarry, headline};
+  }
+
+  const c23 = carryCalc(g23, c23in, true);
+  const c20 = carryCalc(r20, c20in, false);
+  const c22 = carryCalc(r22, c22in, true);
+
+  const breakdown = (label, gross, calc, yr) => calc.usedCarry > 0 ? `<div class="tx-breakdown">
+      <div class="tbd-row"><span>${label} ${yr}</span><span>${eur(gross)}</span></div>
+      <div class="tbd-row down"><span>− Verlustvortrag genutzt</span><span>−${eur(calc.usedCarry)}</span></div>
+    </div>` : "";
+
+  const remainingCarryNote = (calc) => calc.remainingCarry > 0 ? `<div class="tx-hint"
+      style="margin-top:6px;color:var(--a22)">Verlustvortrag übrig: ${eur(calc.remainingCarry)}
+      (nicht verrechenbar über positive Einkünfte hinaus, für Folgejahre erneut eintragen)</div>` : "";
+
+  const card23 = `<div class="taxcard" data-b="par23">
+    <div class="tx-law">§ 23 EStG</div><div class="tx-name">Private Veräußerungsgeschäfte</div>
+    ${breakdown("Gewinn", g23, c23, YEAR)}
+    <div class="tx-amount" style="color:var(--fg)">${eur(c23.headline)}</div>
+    ${c23.usedCarry>0?`<div class="tx-hint" style="margin-top:-8px">${
+      c23.headline<=0?`steuerpflichtig für ${YEAR}: 0 €`:"verbleibender steuerpflichtiger Gewinn"}</div>`:""}
+    <div class="fg-bar ${c23.headline>fg23?"over":""}"><i style="width:${
+      Math.min(100,Math.abs(c23.headline)/fg23*100)}%"></i></div>
+    <div class="tx-hint">${c23.headline>fg23
+      ? `Freigrenze von ${eur(fg23)} überschritten – der <b>gesamte</b> Betrag ist steuerpflichtig.`
+      : c23.headline <= 0
+        ? `Kein steuerpflichtiger Gewinn. Die Freigrenze von ${eur(fg23)} ist unberührt.`
+        : `Noch ${eur(fg23-c23.headline)} bis zur Freigrenze von ${eur(fg23)}. Bleibt es darunter, fällt keine Steuer an.`}</div>
+    ${remainingCarryNote(c23)}
+    <div class="tx-hint" style="margin-top:8px;color:var(--faint)">
+      ${y.par23.count} steuerpflichtige, ${y.par23.countTaxFree} steuerfreie Veräußerungen</div>
+  </div>`;
+
+  const card20 = `<div class="taxcard" data-b="par20">
+    <div class="tx-law">§ 20 EStG · Anlage KAP</div><div class="tx-name">Termingeschäfte</div>
+    ${breakdown("Ergebnis", r20, c20, YEAR)}
+    <div class="tx-amount" style="color:${c20.headline>=0?"var(--up)":"var(--down)"}">${sgn(c20.headline)} €</div>
+    ${c20.usedCarry>0 && c20.headline<=0?`<div class="tx-hint" style="margin-top:-8px">steuerpflichtig für ${YEAR}: 0 €</div>`:""}
+    <div class="tx-hint">Keine Freigrenze, aber Sparerpauschbetrag. Ein echter Verlust des Jahres
+      bleibt sichtbar negativ - der Verlustvortrag verrechnet nur, solange das Ergebnis positiv ist,
+      und drückt es nie unter 0.</div>
+    ${remainingCarryNote(c20)}
+    <div class="tx-hint" style="margin-top:8px;color:var(--faint)">
+      ${y.par20.count} Buchungen${Object.entries(y.par20.native||{}).map(
+        ([a,v])=>` · ${nfx(v)} ${esc(a)}`).join("")}</div>
+  </div>`;
+
+  const card22 = `<div class="taxcard" data-b="par22">
+    <div class="tx-law">§ 22 Nr. 3 EStG</div><div class="tx-name">Sonstige Einkünfte</div>
+    ${breakdown("Ergebnis", r22, c22, YEAR)}
+    <div class="tx-amount">${eur(c22.headline)}</div>
+    ${c22.usedCarry>0?`<div class="tx-hint" style="margin-top:-8px">${
+      c22.headline<=0?`steuerpflichtig für ${YEAR}: 0 €`:"verbleibendes steuerpflichtiges Ergebnis"}</div>`:""}
+    <div class="fg-bar ${c22.headline>fg22?"over":""}"><i style="width:${
+      Math.min(100,Math.abs(c22.headline)/fg22*100)}%"></i></div>
+    <div class="tx-hint">${c22.headline>fg22
+      ? `Freigrenze von ${eur(fg22)} überschritten.`
+      : c22.headline <= 0
+        ? `Keine Einkünfte in diesem Topf.`
+        : `Noch ${eur(fg22-c22.headline)} bis zur Freigrenze von ${eur(fg22)}.`}</div>
+    ${remainingCarryNote(c22)}
+    <div class="tx-hint" style="margin-top:8px;color:var(--faint)">
+      ${y.par22.count} Buchungen</div>
+  </div>`;
+
+  const carryRow = (bucket, label, val) => `<div class="carryrow" data-bucket="${bucket}">
+    <label>${label}</label>
+    <input type="text" class="carry-input" value="${val>0?nf(val):""}" placeholder="0,00">
+    <button class="carry-save">Übernehmen</button>
+    <span class="carrysaved hidden">gespeichert</span>
+  </div>`;
+  const carryCard = `<div class="sect">Verlustvortrag ${YEAR}</div>
+    <div class="card">
+      <div class="note" style="padding:12px 20px 0">Verlust aus Vorjahren, der in diesem Jahr
+        noch zur Verrechnung ansteht - je Topf, als positive Zahl. Wird nicht automatisch
+        fortgeschrieben.</div>
+      ${carryRow("par23","§ 23 · Veräußerungsgeschäfte", c23in)}
+      ${carryRow("par20","§ 20 · Termingeschäfte", c20in)}
+      ${carryRow("par22","§ 22 · Sonstige Einkünfte", c22in)}
+    </div>`;
+
+  const lots = (TAXR.openLots||[]).map(l=>{
+    const p = Math.min(100, l.held_days/365*100);
+    return `<div class="lot">
+      <div><div class="title">${nfx(l.qty)} ${esc(l.asset)}</div>
+        <div class="note-s">gekauft ${day(l.acquired)}${
+          l.cost_eur!=null?` für ${eur(l.cost_eur)}`:""}</div></div>
+      <div><div class="lotbar"><i style="width:${p}%"></i></div>
+        <div class="note-s" style="margin-top:4px">${l.held_days} von 365 Tagen</div></div>
+      <div class="amt">${l.tax_free
+        ? '<i class="pos">steuerfrei</i>'
+        : `<i>ab ${day(l.free_on)}</i><i class="fee">noch ${l.days_to_free} Tage</i>`}</div>
+    </div>`;}).join("");
+
+  const disp = y.par23.disposals.length ? y.par23.disposals.map(d=>`
+    <div class="lot"><div><div class="title">${nfx(d.qty)} ${esc(d.asset)}</div>
+      <div class="note-s">${day(d.acquired)} → ${day(d.sold)} · ${d.held_days} Tage</div></div>
+      <div><span class="tag" data-b="${d.taxable?"par23":"neutral"}">${
+        d.taxable?"steuerpflichtig":"steuerfrei"}</span></div>
+      <div class="amt"><i class="${N(d.gain_eur)>=0?"pos":"neg"}">${
+        d.gain_eur!=null?sgn(d.gain_eur)+" €":"Kurs fehlt"}</i></div></div>`).join("")
+    : `<div class="note" style="padding:16px 20px">Keine Veräußerungen in ${YEAR}.
+       Solange du nur zukaufst, entsteht nach § 23 nichts Steuerpflichtiges.</div>`;
+
+  return `
+    <div class="print-head"><h1 style="font-size:20px;margin:0">Steuerreport ${YEAR}</h1>
+      <div class="mono" style="font-size:11px;color:#555">Krypto-Tracker · OKX ·
+        erstellt ${dtm(TAXR.generatedAt)}</div></div>
+    ${years.length>1?`<div class="years noprint">${years.map(v=>
+      `<button class="ychip" data-y="${v}" aria-pressed="${v===YEAR}">${v}</button>`
+    ).join("")}</div>`:""}
+    ${blockers.length?`<div class="card" style="margin-bottom:12px">
+      <div class="warn" style="margin:14px 20px"><b>Report noch nicht belastbar</b>
+        ${blockers.map(esc).join("<br>")}</div></div>`:""}
+    <div class="taxgrid">${card23}${card20}${card22}</div>
+    ${carryCard}
+    <div class="sect">Offene Bestände und Haltefristen</div>
+    <div class="card">${lots || `<div class="note" style="padding:16px 20px">
+      Keine offenen Bestände.</div>`}</div>
+    <div class="sect">Veräußerungen ${YEAR}</div>
+    <div class="card">${disp}</div>
+    <div class="actions noprint" style="margin-top:20px;border:none;padding-top:0">
+      <button class="act primary" id="btnPdf">PDF herunterladen (Deckblatt + Buchungsliste)</button>
+      <button class="act" id="btnCsv">CSV herunterladen</button>
+    </div>
+    <div class="note noprint" style="padding-left:0">Das PDF enthält ein Deckblatt mit dem
+      Ergebnis je Steuertopf, danach alle Buchungen des Jahres ${YEAR} gruppiert nach Topf.</div>
+    <div class="note" style="padding-left:0;margin-top:14px;border-top:1px solid var(--line);
+      padding-top:12px">Erstellt mit Krypto-Tracker aus den OKX-Exporten vom
+      ${day(STATE.from)} bis ${day(STATE.to)}. Die Zuordnung zu den Steuertöpfen bildet
+      eine Auffassung ab, keine gesicherte Rechtslage – insbesondere die Einordnung von
+      Krypto-Perpetuals als Termingeschäft nach § 20 EStG ist nicht abschließend geklärt.
+      Vor Verwendung in einer Steuererklärung fachlich prüfen lassen. Dies ist keine
+      Steuerberatung.</div>`;
+}
+
+/* ================= Transaktionen ================= */
+
+function rowHtml(t){
+  const amts = t.entries.map(e=>{
+    const v=N(e.amount), cls=e.kind==="fee"?"fee":v>=0?"pos":"neg";
+    const pre=e.kind==="fee"?"Gebühr ":v>=0?"+":"";
+    return `<i class="${cls}">${pre}${nfx(e.amount)} ${esc(e.asset)}</i>`;}).join("");
+  return `<div class="row"><div class="when">${dtm(t.ts_utc)}</div>
+    <div class="what"><div class="title">${esc(TXL[t.tx_type]||t.tx_type)}
+      <span class="tag" data-b="${t.tax_bucket}">${esc((B[t.tax_bucket]||{}).s||t.tax_bucket)}</span>
+    </div>${t.note?`<div class="note-s">${esc(t.note)}</div>`:""}</div>
+    <div class="amt">${amts}</div></div>`;
+}
+
+function txPanel(){
+  const chips=[["","Alle"]].concat(ORDER.filter(k=>STATE.bucketTotals[k]).map(k=>[k,B[k].s]));
+  return `<div class="card"><div class="filters">
+    ${chips.map(([v,l])=>`<button class="chip" data-f="${v}"
+      aria-pressed="${TXQ.bucket===v}">${esc(l)}</button>`).join("")}
+    <input class="search" id="txq" placeholder="suchen…" value="${esc(TXQ.q)}"></div>
+    <div id="txList"><div class="empty"><p>Lade…</p></div></div></div>`;
+}
+
+async function loadTx(append){
+  const p=new URLSearchParams({limit:TXQ.limit,offset:TXQ.offset});
+  if(TXQ.bucket) p.set("bucket",TXQ.bucket);
+  if(TXQ.q) p.set("q",TXQ.q);
+  const d=await api("/api/transactions?"+p);
+  TXD = append&&TXD ? {...d, items:TXD.items.concat(d.items)} : d;
+  const el=$("#txList"); if(!el) return;
+  el.innerHTML = TXD.items.length
+    ? TXD.items.map(rowHtml).join("") + (TXD.items.length<TXD.total
+        ? `<div class="more"><button class="act" id="txMore">Weitere laden (${
+            TXD.items.length} von ${TXD.total})</button></div>`
+        : `<div class="more"><span class="eyebrow">${TXD.total} Vorgänge · alle geladen</span></div>`)
+    : `<div class="empty"><h3>Nichts gefunden</h3><p>Für diesen Filter gibt es keine Vorgänge.</p></div>`;
+  if($("#txMore")) $("#txMore").onclick=()=>{TXQ.offset=TXD.items.length;loadTx(true);};
+}
+
+/* ================= Import ================= */
+
+const KIND={funding:"Funding History",trading:"Trading History",
+  deposit:"Krypto-Einzahlungen",leer:"ohne Datenzeilen"};
+
+function importPanel(){
+  const runs=(STATE.imports||[]).map(r=>{
+    let n={}; try{n=JSON.parse(r.note||"{}")}catch(e){}
+    return `<div class="row"><div class="when">${dtm(r.started_at)}</div>
+      <div class="what"><div class="title">${esc(r.filename)}</div>
+      <div class="note-s">${esc(KIND[n.kind]||n.kind||"")} · Zeitzone ${esc(n.tz||"?")}</div></div>
+      <div class="amt"><i>${r.rows_imported} / ${r.rows_read}</i></div></div>`;}).join("");
+  return `<div class="drop" id="drop" tabindex="0" role="button">
+      <div class="drop-t">CSV hierher ziehen</div>
+      <div class="drop-h">Funding History und Trading History aus dem OKX Order Center.
+        Dieselbe Datei zweimal einzulesen ändert nichts.</div></div>
+    <input type="file" id="file" accept=".csv,.txt,text/csv" class="hidden">
+    <div id="impResult"></div>
+    ${runs?`<div class="sect">Bisherige Importe</div><div class="card">${runs}</div>`:""}`;
+}
+
+function showImport(r,name){
+  const warn=(r.warnings||[]).concat(r.unknown&&r.unknown.length
+    ? ["Unbekannte Vorgangsarten, als ungeklärt gebucht: "+r.unknown.join(", ")]:[]);
+  $("#impResult").innerHTML=`<div class="card" style="margin-top:12px"><div class="kv">
+    <span>Datei <b>${esc(name)}</b></span><span>Typ <b>${esc(KIND[r.kind]||r.kind)}</b></span>
+    <span>Zeitzone <b>${esc(r.timezone)}</b></span><span>Gelesen <b>${r.rowsRead}</b></span>
+    <span>Neu <b>${r.imported}</b></span>${r.skipped?`<span>Bekannt <b>${r.skipped}</b></span>`:""}
+    </div>${r.timezone&&r.timezone!=="UTC"&&r.timezone!=="unbekannt"
+      ? `<div class="note">Zeitstempel von ${esc(r.timezone)} nach UTC umgerechnet.</div>`:""}
+    ${warn.length?`<div class="warn"><b>Hinweis</b>${warn.map(esc).join("<br>")}</div>`:""}</div>`;
+}
+
+async function handleFile(f){
+  $("#impResult").innerHTML=`<div class="card" style="margin-top:12px">
+    <div class="kv">Lese ${esc(f.name)} …</div></div>`;
+  try{
+    const r=await api("/api/import",{name:f.name,text:await f.text()});
+    STATE=r.state; showImport(r,f.name);
+    PF=null; TAXR=null; CURVE=null; FEES=null; refreshDerived();
+    if((STATE.positions||[]).length) refreshMarket();
+  }catch(e){
+    $("#impResult").innerHTML=`<div class="card" style="margin-top:12px">
+      <div class="warn"><b>Das hat nicht geklappt</b>${esc(e.message||e)}</div></div>`;
+  }
+}
+
+/* ================= Rahmen ================= */
+
+function render(){
+  $("#meta").innerHTML = STATE&&STATE.hasData
+    ? `${plural(STATE.txCount,"Vorgang","Vorgänge")}<br>${day(STATE.from)} – ${day(STATE.to)}`:"";
+  document.querySelectorAll(".tab").forEach(t=>
+    t.setAttribute("aria-selected", t.dataset.tab===TAB));
+  updateReviewBadge();
+  const p=$("#panel");
+
+  if(TAB==="dash"){ p.innerHTML=dash(); if(STATE.hasData) loadRecent(); wireCurve(); }
+  else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); }
+  else if(TAB==="tx"){ p.innerHTML=txPanel(); wireTx(); loadTx(false); }
+  else if(TAB==="review"){ p.innerHTML=reviewPanel(); loadReview(); }
+  else if(TAB==="tax"){ p.innerHTML=taxPanel(); wireTax(); }
+  else if(TAB==="import"){ p.innerHTML=importPanel(); wireDrop(); }
+
+  if($("#sB")) $("#sB").onclick=async()=>{
+    const a=$("#sA").value.trim(), v=$("#sV").value.trim();
+    if(!a||!v) return;
+    STATE=await api("/api/snapshot",{balances:{[a]:v}}); render();
+  };
+}
+
+function wireTax(){
+  document.querySelectorAll(".ychip").forEach(c=>c.onclick=()=>{YEAR=+c.dataset.y;render();});
+  if($("#btnPdf")) $("#btnPdf").onclick=async()=>{
+    const btn = $("#btnPdf"); const old = btn.textContent;
+    btn.disabled = true; btn.textContent = "Erzeuge PDF…";
+    try{
+      const result = await api("/api/tax?format=pdf&year="+YEAR);
+      const bytes = Uint8Array.from(atob(result.__pdf_base64__), c => c.charCodeAt(0));
+      downloadBlob(bytes, "application/pdf", result.__filename__ || `steuerreport-${YEAR}.pdf`);
+    }catch(e){
+      alert("PDF konnte nicht erzeugt werden: " + (e.message||e));
+    }finally{
+      btn.disabled = false; btn.textContent = old;
+    }
+  };
+  if($("#btnCsv")) $("#btnCsv").onclick=async()=>{
+    try{
+      const result = await api("/api/tax?format=csv");
+      downloadBlob("\ufeff"+result.__csv__, "text/csv;charset=utf-8", "steuerreport.csv");
+    }catch(e){
+      alert("CSV konnte nicht erzeugt werden: " + (e.message||e));
+    }
+  };
+
+  document.querySelectorAll(".carryrow").forEach(row=>{
+    const bucket = row.dataset.bucket;
+    const input = row.querySelector(".carry-input");
+    const btn = row.querySelector(".carry-save");
+    const saved = row.querySelector(".carrysaved");
+    btn.onclick = async () => {
+      const raw = input.value.trim().replace(",", ".");
+      const amount = raw === "" ? 0 : Number(raw);
+      if(Number.isNaN(amount) || amount < 0){ alert("Bitte eine positive Zahl eintragen."); return; }
+      btn.disabled = true;
+      try{
+        await api("/api/losscarry", {year: YEAR, bucket, amount});
+        TAXR = await api("/api/tax");
+        saved.classList.remove("hidden");
+        render();
+      }catch(e){
+        alert("Das hat nicht geklappt: " + (e.message||e));
+      }finally{
+        btn.disabled = false;
+      }
+    };
+  });
+}
+function wireTx(){
+  document.querySelectorAll(".chip").forEach(c=>c.onclick=()=>{
+    TXQ.bucket=c.dataset.f; TXQ.offset=0; TXD=null;
+    document.querySelectorAll(".chip").forEach(x=>
+      x.setAttribute("aria-pressed", x.dataset.f===TXQ.bucket));
+    loadTx(false);});
+  let t; $("#txq").oninput=e=>{clearTimeout(t);
+    t=setTimeout(()=>{TXQ.q=e.target.value.trim();TXQ.offset=0;TXD=null;loadTx(false);},250);};
+}
+function wirePicker(){
+  document.querySelectorAll("[data-pick]").forEach(b=>b.onclick=async()=>{
+    await api("/api/instmap",{symbol:b.dataset.sym,instId:b.dataset.pick,
+      instType:b.dataset.type});
+    MARKET=null; render(); refreshMarket();});
+  const go=$("#instgo");
+  if(go) go.onclick=async()=>{
+    const q=$("#instq").value.trim();
+    $("#instlist").innerHTML=`<div class="note" style="padding:10px 0">Suche…</div>`;
+    const r=await api("/api/instruments?q="+encodeURIComponent(q));
+    const sym=(STATE.positions[0]||{}).instrument;
+    $("#instlist").innerHTML=r.error
+      ? `<div class="note" style="padding:10px 0">${esc(r.error)}</div>`
+      : candList(r.items,sym);
+    wirePicker();};
+}
+function wireDrop(){
+  const d=$("#drop");
+  d.onclick=()=>$("#file").click();
+  d.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();$("#file").click();}};
+  d.ondragover=e=>{e.preventDefault();d.classList.add("over");};
+  d.ondragleave=()=>d.classList.remove("over");
+  d.ondrop=e=>{e.preventDefault();d.classList.remove("over");
+    if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);};
+  $("#file").onchange=e=>{if(e.target.files[0]) handleFile(e.target.files[0]);};
+}
+
+function go(tab){TAB=tab;render();}
+window.go=go;
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>go(t.dataset.tab));
+
+async function refreshMarket(){
+  try{ MARKET=(await api("/api/market")).positions||null; }
+  catch(e){ MARKET=[{errors:[String(e.message||e)]}]; }
+  if(TAB==="positions"||TAB==="dash") render();
+}
+async function refreshDerived(){
+  try{ PF=await api("/api/portfolio"); }catch(e){ PF=null; }
+  try{ TAXR=await api("/api/tax"); }catch(e){ TAXR=null; }
+  try{ CURVE=await api("/api/capital-curve"); }catch(e){ CURVE=null; }
+  try{ FEES=await api("/api/fees"); }catch(e){ FEES=null; }
+  if(TAB==="dash"||TAB==="tax") render();
+}
+
+async function boot(){
+  try{ await window.pyReady; }
+  catch(e){ return; } // Fehlertext steht schon im #pyLoading-Overlay
+  try{ STATE=await api("/api/state"); }
+  catch(e){ $("#panel").innerHTML=`<div class="card"><div class="empty">
+    <h3>Keine Verbindung</h3><p>Die Python-Laufzeit im Browser antwortet nicht.
+    Seite neu laden und nochmal versuchen.</p></div></div>`; return; }
+  render();
+  if(STATE.hasData) refreshDerived();
+  if((STATE.positions||[]).length) refreshMarket();
+}
+
+$("#btnDemo").onclick=async()=>{STATE=await api("/api/demo",{});PF=TAXR=CURVE=FEES=null;render();refreshDerived();};
+$("#btnReload").onclick=async()=>{STATE=await api("/api/state");render();refreshDerived();refreshMarket();};
+$("#btnReset").onclick=async()=>{
+  if(!confirm("Alle Vorgänge löschen?")) return;
+  STATE=await api("/api/reset",{}); MARKET=PF=TAXR=CURVE=FEES=TXD=null; render();};
+$("#btnQuit").onclick=async()=>{
+  if(!confirm("Wirklich schließen? Deine Daten bleiben im Browser gespeichert.")) return;
+  try{ await window.pySync(); }catch(e){}
+  document.body.innerHTML=`<div class="wrap"><div class="card" style="margin-top:70px">
+    <div class="empty"><h3>Gespeichert</h3><p>Du kannst diesen Tab jetzt schließen.
+    Deine Daten liegen lokal in diesem Browser und sind beim nächsten Öffnen wieder da.</p></div></div></div>`;};
+
+// boot() wird erst ganz am Ende der Datei aufgerufen, nachdem window.pyReady
+// definiert ist (siehe Pyodide-Bootstrap unten) - sonst wuerde boot() auf
+// ein "await window.pyReady" warten, das zu dem Zeitpunkt noch gar nicht
+// existiert.
+</script>
+
+<script src="pyodide/pyodide.js"></script>
+<script>
+// --- Pyodide-Bootstrap --------------------------------------------------
+// Ersetzt den frueheren lokalen Python-Server: dieselbe Logik (ledger.py,
+// tax.py, okx_import.py, market.py, webapi.py) laeuft jetzt direkt im
+// Browser via WebAssembly. Die Datenbank liegt in IndexedDB (ueberlebt
+// Neuladen/Neustart des Browsers), nichts verlaesst das Geraet.
+window.pyReady = (async () => {
+  const overlay = document.getElementById("pyLoading");
+  try {
+    const pyodide = await loadPyodide({ indexURL: "pyodide/" });
+
+    pyodide.FS.mkdirTree("/persist");
+    pyodide.FS.mount(pyodide.FS.filesystems.IDBFS, {}, "/persist");
+    await new Promise((res, rej) =>
+      pyodide.FS.syncfs(true, err => err ? rej(err) : res()));
+
+    const files = ["ledger.py", "tax.py", "okx_import.py", "market.py",
+                    "webapi.py", "schema.sql"];
+    for (const f of files) {
+      const text = await (await fetch("py/" + f)).text();
+      pyodide.FS.writeFile("/" + f, text);
+    }
+    // pdf_report.py bewusst nicht geladen: braucht reportlab, das in
+    // Pyodide nicht standardmaessig verfuegbar ist. webapi.py faengt das
+    // ab (PDF_AVAILABLE = False) und der PDF-Button zeigt eine klare
+    // Meldung statt abzustuerzen - CSV bleibt der zuverlaessige Weg.
+
+    await pyodide.runPythonAsync(`
+import sys
+sys.path.insert(0, "/")
+import webapi
+`);
+
+    const webapiDispatch = pyodide.globals.get("webapi").dispatch;
+    window.pyDispatch = (method, path, bodyJson) =>
+      webapiDispatch(method, path, bodyJson);
+    window.pySync = () => new Promise((res, rej) =>
+      pyodide.FS.syncfs(false, err => err ? rej(err) : res()));
+
+    if (overlay) overlay.remove();
+  } catch (e) {
+    if (overlay) overlay.innerHTML =
+      `<div style="max-width:340px;text-align:center">
+         <div style="font-weight:700;margin-bottom:8px">Start fehlgeschlagen</div>
+         <div style="font-size:13px;color:var(--dim)">${(e && e.message) || e}</div>
+       </div>`;
+    throw e;
+  }
+})();
+
+boot();
+</script>
+</body>
+</html>
