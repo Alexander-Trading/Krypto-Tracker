@@ -360,6 +360,9 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
   <div class="actions">
     <button class="act" id="btnDemo">Beispieldaten</button>
     <button class="act" id="btnReload">Neu laden</button>
+    <button class="act" id="btnDbExport">Datenbank sichern</button>
+    <button class="act" id="btnDbImport">Datenbank laden…</button>
+    <input type="file" id="dbFile" accept=".db" class="hidden">
     <button class="act warnish" id="btnReset">Alles löschen</button>
     <button class="act spacer" id="btnQuit">Programm beenden</button>
   </div>
@@ -422,7 +425,7 @@ async function api(p,b){
   // Ersetzt den frueheren fetch()-Aufruf: laeuft komplett im Browser via
   // Pyodide, kein Server, keine Anfrage verlaesst das Geraet.
   const method = b ? "POST" : "GET";
-  const resultJson = window.pyDispatch(method, p, b ? JSON.stringify(b) : "");
+  const resultJson = await window.pyDispatch(method, p, b ? JSON.stringify(b) : "");
   await window.pySync();
   const result = JSON.parse(resultJson);
   if(result.__error__) throw new Error(result.__error__);
@@ -938,21 +941,70 @@ function taxPanel(){
       ${y.par23.count} steuerpflichtige, ${y.par23.countTaxFree} steuerfreie Veräußerungen</div>
   </div>`;
 
-  const card20 = `<div class="taxcard" data-b="par20">
-    <div class="tx-law">§ 20 EStG · Anlage KAP</div><div class="tx-name">Termingeschäfte</div>
-    ${breakdown("Ergebnis", r20, c20, YEAR)}
-    <div class="tx-amount" style="color:${c20.headline>=0?"var(--up)":"var(--down)"}">${sgn(c20.headline)} €</div>
-    ${c20.usedCarry>0 && c20.headline<=0?`<div class="tx-hint" style="margin-top:-8px">steuerpflichtig für ${YEAR}: 0 €</div>`:""}
-    <div class="tx-hint">Keine Freigrenze, aber Sparerpauschbetrag. Ein echter Verlust des Jahres
-      bleibt sichtbar negativ - der Verlustvortrag verrechnet nur, solange das Ergebnis positiv ist,
-      und drückt es nie unter 0.</div>
-    ${remainingCarryNote(c20)}
-    <div class="tx-hint" style="margin-top:8px;color:var(--faint)">
-      ${y.par20.count} Buchungen${Object.entries(y.par20.native||{}).map(
-        ([a,v])=>` · ${nfx(v)} ${esc(a)}`).join("")}</div>
-  </div>`;
+  const SPARERPAUSCHBETRAG = 1000;
+  const nativeStr20 = Object.entries(y.par20.native||{})
+    .map(([a,v])=>`${nfx(v)} ${esc(a)}`).join(" + ");
+  const partialUnpriced20 = !y.par20.allUnpriced && y.par20.unpriced > 0
+    ? `<div class="tx-hint" style="margin-top:8px;color:var(--a22)">${y.par20.unpriced} von ${
+        y.par20.count} Buchungen ohne Kurs - Ergebnis ggf. unvollständig.</div>` : "";
 
-  const card22 = `<div class="taxcard" data-b="par22">
+  let card20;
+  if(y.par20.allUnpriced){
+    card20 = `<div class="taxcard" data-b="par20">
+      <div class="tx-law">§ 20 EStG · Anlage KAP</div><div class="tx-name">Termingeschäfte</div>
+      <div class="tx-amount" style="color:var(--fg)">${nativeStr20 || "–"}</div>
+      <div class="tx-hint" style="margin-top:-8px;color:var(--a22)">Kein EUR-Kurs verfügbar -
+        Betrag in Originalwährung. Das ist nicht 0, nur (noch) nicht umgerechnet.</div>
+      <div class="tx-hint" style="margin-top:8px;color:var(--faint)">${y.par20.count} Buchungen</div>
+    </div>`;
+  } else {
+    const usedCarry20 = r20 > 0 ? Math.min(c20in, r20) : 0;
+    const afterCarry20 = r20 > 0 ? r20 - usedCarry20 : r20;
+    const usedPausch = r20 > 0 ? Math.min(SPARERPAUSCHBETRAG, afterCarry20) : 0;
+    const afterPausch = r20 > 0 ? afterCarry20 - usedPausch : afterCarry20;
+    const remainingCarry20 = c20in - usedCarry20;
+    const pctPausch = Math.min(100, afterCarry20 / SPARERPAUSCHBETRAG * 100);
+    const pctCarry20 = c20in > 0 ? Math.min(100, usedCarry20 / c20in * 100) : 0;
+
+    card20 = `<div class="taxcard" data-b="par20">
+      <div class="tx-law">§ 20 EStG · Anlage KAP</div><div class="tx-name">Termingeschäfte</div>
+      ${usedCarry20>0?`<div class="tx-breakdown">
+        <div class="tbd-row"><span>Ergebnis ${YEAR}</span><span>${eur(r20)}</span></div>
+        <div class="tbd-row down"><span>− Verlustvortrag genutzt</span><span>−${eur(usedCarry20)}</span></div>
+      </div>`:""}
+      <div class="tx-amount" style="color:${afterPausch>=0?"var(--up)":"var(--down)"}">${sgn(afterPausch)} €</div>
+      <div class="tx-hint" style="margin-top:-8px">${
+        r20<=0 ? "echter Verlust des Jahres"
+        : afterPausch>0 ? "steuerpflichtiger Ertrag nach Verlustvortrag und Sparerpauschbetrag"
+        : `steuerpflichtig für ${YEAR}: 0 €`}</div>
+
+      ${r20>0 ? `
+      <div class="tx-hint" style="margin-top:12px;margin-bottom:3px">Sparerpauschbetrag</div>
+      <div class="fg-bar"><i style="width:${pctPausch}%"></i></div>
+      <div class="tx-hint">${eur(usedPausch)} von ${eur(SPARERPAUSCHBETRAG)} genutzt</div>` : ""}
+
+      ${c20in>0 ? `
+      <div class="tx-hint" style="margin-top:12px;margin-bottom:3px">Verlustvortrag</div>
+      <div class="fg-bar"><i style="width:${pctCarry20}%"></i></div>
+      <div class="tx-hint">${eur(usedCarry20)} von ${eur(c20in)} verrechnet${
+        remainingCarry20>0?` · ${eur(remainingCarry20)} übrig`:""}</div>` : ""}
+
+      ${partialUnpriced20}
+      <div class="tx-hint" style="margin-top:12px;color:var(--faint)">
+        ${y.par20.count} Buchungen${nativeStr20?" · "+nativeStr20:""}</div>
+    </div>`;
+  }
+
+  const nativeStr22 = Object.entries(y.par22.native||{})
+    .map(([a,v])=>`${nfx(v)} ${esc(a)}`).join(" + ");
+
+  const card22 = y.par22.allUnpriced ? `<div class="taxcard" data-b="par22">
+    <div class="tx-law">§ 22 Nr. 3 EStG</div><div class="tx-name">Sonstige Einkünfte</div>
+    <div class="tx-amount" style="color:var(--fg)">${nativeStr22 || "–"}</div>
+    <div class="tx-hint" style="margin-top:-8px;color:var(--a22)">Kein EUR-Kurs verfügbar -
+      Betrag in Originalwährung. Das ist nicht 0, nur (noch) nicht umgerechnet.</div>
+    <div class="tx-hint" style="margin-top:8px;color:var(--faint)">${y.par22.count} Buchungen</div>
+  </div>` : `<div class="taxcard" data-b="par22">
     <div class="tx-law">§ 22 Nr. 3 EStG</div><div class="tx-name">Sonstige Einkünfte</div>
     ${breakdown("Ergebnis", r22, c22, YEAR)}
     <div class="tx-amount">${eur(c22.headline)}</div>
@@ -966,6 +1018,9 @@ function taxPanel(){
         ? `Keine Einkünfte in diesem Topf.`
         : `Noch ${eur(fg22-c22.headline)} bis zur Freigrenze von ${eur(fg22)}.`}</div>
     ${remainingCarryNote(c22)}
+    ${!y.par22.allUnpriced && y.par22.unpriced > 0 ? `<div class="tx-hint"
+      style="margin-top:8px;color:var(--a22)">${y.par22.unpriced} von ${y.par22.count}
+      Buchungen ohne Kurs - Ergebnis ggf. unvollständig.</div>` : ""}
     <div class="tx-hint" style="margin-top:8px;color:var(--faint)">
       ${y.par22.count} Buchungen</div>
   </div>`;
@@ -1256,8 +1311,12 @@ async function boot(){
   catch(e){ return; } // Fehlertext steht schon im #pyLoading-Overlay
   try{ STATE=await api("/api/state"); }
   catch(e){ $("#panel").innerHTML=`<div class="card"><div class="empty">
-    <h3>Keine Verbindung</h3><p>Die Python-Laufzeit im Browser antwortet nicht.
-    Seite neu laden und nochmal versuchen.</p></div></div>`; return; }
+    <h3>Start fehlgeschlagen</h3>
+    <p style="font-family:var(--mono);font-size:12px;color:var(--down);
+      word-break:break-word;text-align:left;background:var(--panel-2);
+      border-radius:8px;padding:10px;margin:10px 0">${esc(String(e.message||e))}</p>
+    <p>Seite neu laden und nochmal versuchen. Bleibt der Fehler bestehen,
+    diesen Text weitergeben.</p></div></div>`; return; }
   render();
   if(STATE.hasData) refreshDerived();
   if((STATE.positions||[]).length) refreshMarket();
@@ -1265,6 +1324,44 @@ async function boot(){
 
 $("#btnDemo").onclick=async()=>{STATE=await api("/api/demo",{});PF=TAXR=CURVE=FEES=null;render();refreshDerived();};
 $("#btnReload").onclick=async()=>{STATE=await api("/api/state");render();refreshDerived();refreshMarket();};
+
+$("#btnDbExport").onclick=async()=>{
+  try{
+    const bytes = window.pyExportDb();
+    const d = new Date().toISOString().slice(0,10);
+    downloadBlob(bytes, "application/octet-stream", `krypto-tracker-${d}.db`);
+  }catch(e){
+    alert("Export fehlgeschlagen: "+(e.message||e));
+  }
+};
+
+$("#btnDbImport").onclick=()=>$("#dbFile").click();
+$("#dbFile").onchange=async(e)=>{
+  const file = e.target.files[0]; if(!file) return;
+  e.target.value = "";
+  const bytes = new Uint8Array(await file.arrayBuffer());
+
+  let check;
+  try{ check = window.pyValidateImport(bytes); }
+  catch(err){ alert("Datei konnte nicht geprüft werden: "+(err.message||err)); return; }
+  if(!check.ok){ alert(check.error || "Diese Datei ist keine gültige Krypto-Tracker-Datenbank."); return; }
+
+  const span = check.from ? `${day(check.from)} – ${day(check.to)}` : "keine Vorgänge";
+  const sure = confirm(
+    `Diese Datei enthält ${check.txCount} Vorgänge (${span}).\n\n`+
+    `Deine aktuellen Daten in diesem Browser werden dadurch ERSETZT (ein `+
+    `Backup der bisherigen liegt danach unter tracker.db.vor-import.bak `+
+    `im Browser-Speicher). Die Seite lädt anschließend neu. Fortfahren?`);
+  if(!sure) return;
+
+  try{
+    await window.pyCommitImport(bytes);
+    location.reload();
+  }catch(err){
+    alert("Import fehlgeschlagen: "+(err.message||err));
+  }
+};
+
 $("#btnReset").onclick=async()=>{
   if(!confirm("Alle Vorgänge löschen?")) return;
   STATE=await api("/api/reset",{}); MARKET=PF=TAXR=CURVE=FEES=TXD=null; render();};
@@ -1301,7 +1398,19 @@ window.pyReady = (async () => {
     const files = ["ledger.py", "tax.py", "okx_import.py", "market.py",
                     "webapi.py", "schema.sql"];
     for (const f of files) {
-      const text = await (await fetch("py/" + f)).text();
+      const resp = await fetch("py/" + f);
+      if (!resp.ok) {
+        throw new Error(
+          `Datei "py/${f}" konnte nicht geladen werden (HTTP ${resp.status}). `+
+          `Vermutlich fehlt sie beim Hosting oder liegt am falschen Pfad - `+
+          `prüfen, ob der komplette "py"-Ordner hochgeladen wurde.`);
+      }
+      const text = await resp.text();
+      if (f.endsWith(".py") && /^\s*<!DOCTYPE|^\s*<html/i.test(text)) {
+        throw new Error(
+          `Datei "py/${f}" enthält HTML statt Python-Code - das Hosting liefert `+
+          `dafür vermutlich eine Fehlerseite (404) statt der echten Datei aus.`);
+      }
       pyodide.FS.writeFile("/" + f, text);
     }
     // pdf_report.py bewusst nicht geladen: braucht reportlab, das in
@@ -1320,6 +1429,25 @@ import webapi
       webapiDispatch(method, path, bodyJson);
     window.pySync = () => new Promise((res, rej) =>
       pyodide.FS.syncfs(false, err => err ? rej(err) : res()));
+
+    const DB_PATH = "/persist/tracker.db";
+    const webapiValidate = pyodide.globals.get("webapi").validate_import;
+    window.pyExportDb = () => pyodide.FS.readFile(DB_PATH);
+    window.pyValidateImport = (bytes) => {
+      pyodide.FS.writeFile("/tmp/import_check.db", bytes);
+      const result = JSON.parse(webapiValidate("/tmp/import_check.db"));
+      pyodide.FS.unlink("/tmp/import_check.db");
+      return result;
+    };
+    window.pyCommitImport = async (bytes) => {
+      // Backup der bisherigen Datei, falls das Ueberschreiben ungewollt war.
+      try {
+        const old = pyodide.FS.readFile(DB_PATH);
+        pyodide.FS.writeFile(DB_PATH + ".vor-import.bak", old);
+      } catch (e) { /* noch keine DB vorhanden - kein Backup noetig */ }
+      pyodide.FS.writeFile(DB_PATH, bytes);
+      await window.pySync();
+    };
 
     if (overlay) overlay.remove();
   } catch (e) {
