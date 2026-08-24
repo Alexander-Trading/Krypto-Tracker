@@ -16,6 +16,7 @@ reicht und wird von der JS-Seite genauso behandelt wie ein HTTP-Fehler.
 
 import json
 import urllib.parse
+import asyncio
 from decimal import Decimal
 
 import ledger as L
@@ -366,6 +367,16 @@ def validate_import(path):
     return _dump(L.inspect_db_file(path))
 
 
+# Ein Browser-Tab hat nur einen einzigen Nutzer, aber JS kann trotzdem zwei
+# api()-Aufrufe uebereinander schicken (z.B. wenn irgendwo async-Code ohne
+# await lief, oder bei einem Doppel-Tap). SQLite mit mehreren gleichzeitig
+# offenen Schreibverbindungen auf derselben Datei quittiert das mit
+# "database is locked" - vor allem im IDBFS-Dateisystem heikel. Dieser Lock
+# serialisiert alle dispatch()-Aufrufe strikt nacheinander, unabhaengig
+# davon, was JS an Reihenfolge einhaelt.
+_db_lock = asyncio.Lock()
+
+
 async def dispatch(method, path_with_query, body_json):
     """Einziger Einstiegspunkt von JS aus. method: 'GET'|'POST'.
     path_with_query: z.B. '/api/transactions?bucket=unknown&limit=50'.
@@ -377,15 +388,16 @@ async def dispatch(method, path_with_query, body_json):
     else:
         path, query = path_with_query, ""
 
-    conn = _connect()
-    try:
-        if method == "GET":
-            result = await _route_get(path, query, conn)
-        else:
-            body = json.loads(body_json) if body_json else {}
-            result = await _route_post(path, body, conn)
-        return _dump(result)
-    except Exception as exc:
-        return _dump({"__error__": str(exc)})
-    finally:
-        conn.close()
+    async with _db_lock:
+        conn = _connect()
+        try:
+            if method == "GET":
+                result = await _route_get(path, query, conn)
+            else:
+                body = json.loads(body_json) if body_json else {}
+                result = await _route_post(path, body, conn)
+            return _dump(result)
+        except Exception as exc:
+            return _dump({"__error__": str(exc)})
+        finally:
+            conn.close()
