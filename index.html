@@ -1174,8 +1174,9 @@ async function handleFile(f){
   try{
     const r=await api("/api/import",{name:f.name,text:await f.text()});
     STATE=r.state; showImport(r,f.name);
-    PF=null; TAXR=null; CURVE=null; FEES=null; refreshDerived();
-    if((STATE.positions||[]).length) refreshMarket();
+    PF=null; TAXR=null; CURVE=null; FEES=null;
+    await refreshDerived();
+    if((STATE.positions||[]).length) await refreshMarket();
   }catch(e){
     $("#impResult").innerHTML=`<div class="card" style="margin-top:12px">
       <div class="warn"><b>Das hat nicht geklappt</b>${esc(e.message||e)}</div></div>`;
