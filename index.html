@@ -1244,7 +1244,12 @@ function showImport(r,name){
     <span>Neu <b>${r.imported}</b></span>${r.skipped?`<span>Bekannt <b>${r.skipped}</b></span>`:""}
     </div>${r.timezone&&r.timezone!=="UTC"&&r.timezone!=="unbekannt"
       ? `<div class="note">Zeitstempel von ${esc(r.timezone)} nach UTC umgerechnet.</div>`:""}
-    ${warn.length?`<div class="warn"><b>Hinweis</b>${warn.map(esc).join("<br>")}</div>`:""}</div>`;
+    ${warn.length?`<div class="warn"><b>Hinweis</b>${warn.map(esc).join("<br>")}</div>`:""}
+    <div class="actions" style="border:none;padding:12px 20px 0;margin:0">
+      <button class="act primary" id="btnSaveNow">Stand jetzt sichern</button></div></div>`;
+  if($("#btnSaveNow")) $("#btnSaveNow").onclick=()=>{
+    if(exportDb()) $("#btnSaveNow").textContent="Gesichert ✓";
+  };
 }
 
 async function handleFile(f){
@@ -1490,15 +1495,22 @@ async function boot(){
 $("#btnDemo").onclick=async()=>{STATE=await api("/api/demo",{});PF=TAXR=CURVE=FEES=null;render();refreshDerived();};
 $("#btnReload").onclick=async()=>{STATE=await api("/api/state");render();refreshDerived();refreshMarket();};
 
-$("#btnDbExport").onclick=async()=>{
+function exportDb(){
   try{
     const bytes = window.pyExportDb();
-    const d = new Date().toISOString().slice(0,10);
-    downloadBlob(bytes, "application/octet-stream", `krypto-tracker-${d}.db`);
+    const now = new Date();
+    const d = now.toISOString().slice(0,10);
+    const t = now.toTimeString().slice(0,5).replace(":","-");
+    downloadBlob(bytes, "application/octet-stream", `Krypto-Tracker_${d}_${t}.db`);
+    return true;
   }catch(e){
     alert("Export fehlgeschlagen: "+(e.message||e));
+    return false;
   }
-};
+}
+window.exportDb = exportDb;
+
+$("#btnDbExport").onclick=()=>exportDb();
 
 $("#btnDbImport").onclick=()=>$("#dbFile").click();
 $("#dbFile").onchange=async(e)=>{
