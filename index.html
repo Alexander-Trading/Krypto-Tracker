@@ -382,8 +382,6 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
   <div id="panel"></div>
 
   <div class="actions">
-    <button class="act" id="btnDemo">Beispieldaten</button>
-    <button class="act" id="btnReload">Neu laden</button>
     <button class="act" id="btnDbExport">Datenbank sichern</button>
     <button class="act" id="btnDbImport">Datenbank laden…</button>
     <input type="file" id="dbFile" accept=".db" class="hidden">
@@ -1317,6 +1315,26 @@ function render(){
     if(!a||!v) return;
     STATE=await api("/api/snapshot",{balances:{[a]:v}}); render();
   };
+  managePosAutoRefresh();
+}
+
+// Positionen-Tab: Live-Kurs/Marge/uPnL haengen von OKX' Marktdaten ab, die sich
+// laufend aendern - alle 10s automatisch neu abrufen, solange der Tab offen
+// ist. Kein Intervall auf anderen Tabs, um nicht unnoetig CPU/Netzwerk zu
+// verbrauchen (wichtig gerade im Browser, wo pyfetch jeden Abruf ueber echte
+// HTTP-Requests treibt).
+let posAutoRefreshTimer = null;
+function managePosAutoRefresh(){
+  if(TAB === "positions" && (STATE.positions||[]).length){
+    if(!posAutoRefreshTimer){
+      posAutoRefreshTimer = setInterval(()=>{
+        if(TAB === "positions") refreshMarket();
+      }, 10000);
+    }
+  } else if(posAutoRefreshTimer){
+    clearInterval(posAutoRefreshTimer);
+    posAutoRefreshTimer = null;
+  }
 }
 
 function wireTax(){
@@ -1539,9 +1557,6 @@ async function boot(){
   if(STATE.hasData) refreshDerived();
   if((STATE.positions||[]).length) refreshMarket();
 }
-
-$("#btnDemo").onclick=async()=>{STATE=await api("/api/demo",{});PF=TAXR=CURVE=FEES=null;render();refreshDerived();};
-$("#btnReload").onclick=async()=>{STATE=await api("/api/state");render();refreshDerived();refreshMarket();};
 
 function exportDb(){
   try{
