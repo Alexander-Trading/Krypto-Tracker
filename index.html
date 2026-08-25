@@ -665,19 +665,34 @@ function fmtAssetSum(d){
   return keys.map(k=>nfx(d[k])+" "+esc(k)).join(" + ");
 }
 
+function fmtNetAssetSum(recv, paid, fees){
+  const assets = new Set([...Object.keys(recv||{}), ...Object.keys(paid||{}), ...Object.keys(fees||{})]);
+  const parts = [];
+  assets.forEach(a=>{
+    const net = N(recv&&recv[a]||0) - N(paid&&paid[a]||0) - N(fees&&fees[a]||0);
+    if(net !== 0) parts.push({a, net});
+  });
+  if(!parts.length) return {text:"–", up:true};
+  const allUp = parts.every(p=>p.net>=0);
+  return {text: parts.map(p=>sgn(p.net)+" "+esc(p.a)).join(" + "), up: allUp};
+}
+
 function feesCard(){
   if(!FEES) return "";
   const has = Object.keys(FEES.feesPaid||{}).length || Object.keys(FEES.fundingReceived||{}).length
     || Object.keys(FEES.fundingPaid||{}).length;
   if(!has) return "";
+  const net = fmtNetAssetSum(FEES.fundingReceived, FEES.fundingPaid, FEES.feesPaid);
   return `<div class="sect">Gebühren &amp; Funding</div><div class="card">
     <div class="stats">
-      <div class="stat"><div class="tile-k">Gebühren gezahlt</div>
-        <div class="tile-v down" style="font-size:17px">${fmtAssetSum(FEES.feesPaid)}</div></div>
       <div class="stat"><div class="tile-k">Funding erhalten</div>
         <div class="tile-v up" style="font-size:17px">${fmtAssetSum(FEES.fundingReceived)}</div></div>
       <div class="stat"><div class="tile-k">Funding gezahlt</div>
         <div class="tile-v down" style="font-size:17px">${fmtAssetSum(FEES.fundingPaid)}</div></div>
+      <div class="stat"><div class="tile-k">Gebühren gezahlt</div>
+        <div class="tile-v down" style="font-size:17px">${fmtAssetSum(FEES.feesPaid)}</div></div>
+      <div class="stat"><div class="tile-k">Gesamt</div>
+        <div class="tile-v ${net.up?"up":"down"}" style="font-size:17px">${net.text}</div></div>
     </div></div>`;
 }
 
@@ -783,11 +798,25 @@ function posCard(p, mk){
     ? `<div class="warn"><b>Marktdaten unvollständig</b>${mk.errors.map(esc).join("<br>")}</div>`:"";
   const picker = (mk&&mk.candidates) ? pickerHtml(p, mk.candidates) : "";
 
+  const ctFix = `<div class="liq" style="padding-top:14px">
+    <div class="tile-k" style="margin-bottom:8px">Größe stimmt nicht?</div>
+    <div class="note" style="padding:0 0 10px">Ohne Live-Kurs schätzt die App die Kontraktgröße -
+      das kann danebenliegen. Trag die echte Menge ${esc(p.base||"")} ein, wie sie in deiner
+      OKX-App steht, dann rechnet die App ab sofort damit (auch bei künftigen Importen).</div>
+    <div style="display:flex;gap:8px">
+      <input type="text" class="ctfix-input" placeholder="z.B. ${nf(Math.abs(N(p.size)),4)}"
+        style="flex:1;background:var(--panel-2);border:1px solid var(--line);color:var(--fg);
+        border-radius:8px;padding:8px 10px;font-family:var(--mono);box-sizing:border-box">
+      <button class="act ctfix-save" data-inst="${esc(p.instrument)}">Korrigieren</button>
+    </div>
+    <div class="ctfix-err"></div>
+  </div>`;
+
   return `<div class="card"><div class="ch">
       <div><div class="ct">${esc(p.instrument)}</div>
         <div class="eyebrow">${p.side==="long"?"Long":"Short"} · Isolated</div></div>
       <div class="mono" style="font-size:12px;color:var(--dim)">Stand ${day(p.as_of)}</div>
-    </div><div class="stats">${stats}</div>${liqB}${errs}${picker}</div>`;
+    </div><div class="stats">${stats}</div>${liqB}${errs}${picker}${ctFix}</div>`;
 }
 
 function pickerHtml(p, cands){
@@ -987,7 +1016,7 @@ function taxPanel(){
     const usedPausch = r20 > 0 ? Math.min(SPARERPAUSCHBETRAG, afterCarry20) : 0;
     const afterPausch = r20 > 0 ? afterCarry20 - usedPausch : afterCarry20;
     const remainingCarry20 = c20in - usedCarry20;
-    const pctPausch = Math.min(100, afterCarry20 / SPARERPAUSCHBETRAG * 100);
+    const pctPausch = Math.max(0, Math.min(100, afterCarry20 / SPARERPAUSCHBETRAG * 100));
     const pctCarry20 = c20in > 0 ? Math.min(100, usedCarry20 / c20in * 100) : 0;
 
     card20 = `<div class="taxcard" data-b="par20">
@@ -997,15 +1026,14 @@ function taxPanel(){
         <div class="tbd-row down"><span>− Verlustvortrag genutzt</span><span>−${eur(usedCarry20)}</span></div>
       </div>`:""}
       <div class="tx-amount" style="color:${afterPausch>=0?"var(--up)":"var(--down)"}">${sgn(afterPausch)} €</div>
-      <div class="tx-hint" style="margin-top:-8px">${
-        r20<=0 ? "echter Verlust des Jahres"
-        : afterPausch>0 ? "steuerpflichtiger Ertrag nach Verlustvortrag und Sparerpauschbetrag"
-        : `steuerpflichtig für ${YEAR}: 0 €`}</div>
-
-      ${r20>0 ? `
-      <div class="tx-hint" style="margin-top:12px;margin-bottom:3px">Sparerpauschbetrag</div>
+      ${(usedCarry20>0 && r20>0)?`<div class="tx-hint" style="margin-top:-8px">${
+        afterPausch>0?"steuerpflichtiger Ertrag nach Verlustvortrag und Sparerpauschbetrag"
+        :`steuerpflichtig für ${YEAR}: 0 €`}</div>`:""}
       <div class="fg-bar"><i style="width:${pctPausch}%"></i></div>
-      <div class="tx-hint">${eur(usedPausch)} von ${eur(SPARERPAUSCHBETRAG)} genutzt</div>` : ""}
+      <div class="tx-hint">${
+        r20<=0 ? "Echter Verlust des Jahres - kein Verlustvortrag oder Sparerpauschbetrag nötig."
+        : afterPausch>0 ? `Sparerpauschbetrag von ${eur(SPARERPAUSCHBETRAG)} ausgeschöpft. Steuerpflichtig: ${eur(afterPausch)}.`
+        : `${eur(usedPausch)} von ${eur(SPARERPAUSCHBETRAG)} Sparerpauschbetrag genutzt. Steuerpflichtig für ${YEAR}: 0 €.`}</div>
 
       ${c20in>0 ? `
       <div class="tx-hint" style="margin-top:12px;margin-bottom:3px">Verlustvortrag</div>
@@ -1014,7 +1042,7 @@ function taxPanel(){
         remainingCarry20>0?` · ${eur(remainingCarry20)} übrig`:""}</div>` : ""}
 
       ${partialUnpriced20}
-      <div class="tx-hint" style="margin-top:12px;color:var(--faint)">
+      <div class="tx-hint" style="margin-top:8px;color:var(--faint)">
         ${y.par20.count} Buchungen${nativeStr20?" · "+nativeStr20:""}</div>
     </div>`;
   }
@@ -1039,7 +1067,7 @@ function taxPanel(){
     <div class="tx-hint">${c22.headline>fg22
       ? `Freigrenze von ${eur(fg22)} überschritten.`
       : c22.headline <= 0
-        ? `Keine Einkünfte in diesem Topf.`
+        ? `Keine Einkünfte in diesem Topf. Die Freigrenze liegt bei ${eur(fg22)}.`
         : `Noch ${eur(fg22-c22.headline)} bis zur Freigrenze von ${eur(fg22)}.`}</div>
     ${remainingCarryNote(c22)}
     ${!y.par22.allUnpriced && y.par22.unpriced > 0 ? `<div class="tx-hint"
@@ -1447,6 +1475,26 @@ function wirePicker(){
       ? `<div class="note" style="padding:10px 0">${esc(r.error)}</div>`
       : candList(r.items,sym);
     wirePicker();};
+
+  document.querySelectorAll(".ctfix-save").forEach(b=>b.onclick=async()=>{
+    const wrap = b.closest(".liq");
+    const input = wrap.querySelector(".ctfix-input");
+    const errEl = wrap.querySelector(".ctfix-err");
+    const raw = input.value.trim().replace(",", ".");
+    if(!raw || Number.isNaN(Number(raw))){
+      errEl.innerHTML = `<div class="warn" style="margin-top:8px">Bitte eine gültige Zahl eintragen.</div>`;
+      return;
+    }
+    b.disabled = true; b.textContent = "Speichere…";
+    try{
+      await api("/api/position-fix", {instrument: b.dataset.inst, correctSize: raw});
+      STATE = await api("/api/state");
+      MARKET = null; render(); refreshMarket();
+    }catch(e){
+      errEl.innerHTML = `<div class="warn" style="margin-top:8px">${esc(e.message||e)}</div>`;
+      b.disabled = false; b.textContent = "Korrigieren";
+    }
+  });
 }
 function wireDrop(){
   const d=$("#drop");
