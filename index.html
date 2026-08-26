@@ -397,6 +397,11 @@ const esc = s => String(s ?? "").replace(/[&<>"]/g, c =>
 const N = v => Number(v);
 const nf = (v,d=2) => N(v).toLocaleString("de-DE",
   {minimumFractionDigits:d, maximumFractionDigits:d});
+// Wie nf(), aber ohne unnoetige Nachkommanullen (5,925 statt 5,9250) - fuer
+// Mengenangaben, wo krumme Nachkommastellen normal sind und Nullen nur
+// stoeren, anders als bei Euro-Betraegen, die immer 2 Nachkommastellen wollen.
+const nfTrim = (v,maxD=8) => N(v).toLocaleString("de-DE",
+  {minimumFractionDigits:0, maximumFractionDigits:maxD});
 const eur = v => v == null ? "–" : nf(v) + " €";
 const nfx = v => N(v).toLocaleString("de-DE",
   {minimumFractionDigits:2, maximumFractionDigits: Math.abs(N(v)) < 1 ? 8 : 2});
@@ -567,10 +572,6 @@ function dash(){
         ? (adj.unrealizedEur!=null ? sgn(upnl)+" "+esc(pos&&pos.settle_ccy||"")+" · " : "")
           + "bereits in Ergebnis gesamt"
         : "Kurs fehlt"}</div></div>
-    <div class="tile"><div class="tile-k">Offene Position</div>
-      <div class="tile-v">${pos?nf(pos.size,4)+" "+esc(pos.base||""):"–"}</div>
-      <div class="tile-s" style="overflow:hidden;text-overflow:ellipsis">${
-        pos?esc(pos.instrument):"keine"}</div></div>
   </div>`;
 
   return hero + curveCard + tiles + feesCard() + statusCard() + recentCard();
@@ -759,7 +760,7 @@ function posCard(p, mk){
   const st=(k,v,s,c)=>`<div class="stat"><div class="tile-k">${k}</div>
     <div class="tile-v ${c||""}">${v}</div>${s?`<div class="tile-s">${s}</div>`:""}</div>`;
 
-  const stats = st("Größe", nf(p.size,4)+" "+esc(p.base||""),
+  const stats = st("Größe", nfTrim(p.size)+" "+esc(p.base||""),
       nf(p.contracts,0)+" Kontrakte")
     + st("Ø Einstieg", nf(entry)+" USD")
     + st("Mark-Preis", mark?nf(mark)+" USD":"–", mark?"live":"nicht abrufbar")
