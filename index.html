@@ -796,25 +796,11 @@ function posCard(p, mk){
     ? `<div class="warn"><b>Marktdaten unvollständig</b>${mk.errors.map(esc).join("<br>")}</div>`:"";
   const picker = (mk&&mk.candidates) ? pickerHtml(p, mk.candidates) : "";
 
-  const ctFix = `<div class="liq" style="padding-top:14px">
-    <div class="tile-k" style="margin-bottom:8px">Größe stimmt nicht?</div>
-    <div class="note" style="padding:0 0 10px">Ohne Live-Kurs schätzt die App die Kontraktgröße -
-      das kann danebenliegen. Trag die echte Menge ${esc(p.base||"")} ein, wie sie in deiner
-      OKX-App steht, dann rechnet die App ab sofort damit (auch bei künftigen Importen).</div>
-    <div style="display:flex;gap:8px">
-      <input type="text" class="ctfix-input" placeholder="z.B. ${nf(Math.abs(N(p.size)),4)}"
-        style="flex:1;background:var(--panel-2);border:1px solid var(--line);color:var(--fg);
-        border-radius:8px;padding:8px 10px;font-family:var(--mono);box-sizing:border-box">
-      <button class="act ctfix-save" data-inst="${esc(p.instrument)}">Korrigieren</button>
-    </div>
-    <div class="ctfix-err"></div>
-  </div>`;
-
   return `<div class="card"><div class="ch">
       <div><div class="ct">${esc(p.instrument)}</div>
         <div class="eyebrow">${p.side==="long"?"Long":"Short"} · Isolated</div></div>
       <div class="mono" style="font-size:12px;color:var(--dim)">Stand ${day(p.as_of)}</div>
-    </div><div class="stats">${stats}</div>${liqB}${errs}${picker}${ctFix}</div>`;
+    </div><div class="stats">${stats}</div>${liqB}${errs}${picker}</div>`;
 }
 
 function pickerHtml(p, cands){
@@ -1493,26 +1479,6 @@ function wirePicker(){
       ? `<div class="note" style="padding:10px 0">${esc(r.error)}</div>`
       : candList(r.items,sym);
     wirePicker();};
-
-  document.querySelectorAll(".ctfix-save").forEach(b=>b.onclick=async()=>{
-    const wrap = b.closest(".liq");
-    const input = wrap.querySelector(".ctfix-input");
-    const errEl = wrap.querySelector(".ctfix-err");
-    const raw = input.value.trim().replace(",", ".");
-    if(!raw || Number.isNaN(Number(raw))){
-      errEl.innerHTML = `<div class="warn" style="margin-top:8px">Bitte eine gültige Zahl eintragen.</div>`;
-      return;
-    }
-    b.disabled = true; b.textContent = "Speichere…";
-    try{
-      await api("/api/position-fix", {instrument: b.dataset.inst, correctSize: raw});
-      STATE = await api("/api/state");
-      MARKET = null; render(); refreshMarket();
-    }catch(e){
-      errEl.innerHTML = `<div class="warn" style="margin-top:8px">${esc(e.message||e)}</div>`;
-      b.disabled = false; b.textContent = "Korrigieren";
-    }
-  });
 }
 function wireDrop(){
   const d=$("#drop");
