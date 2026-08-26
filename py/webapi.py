@@ -198,6 +198,7 @@ async def _route_get(path, query, conn):
             return {"positions": [], "error": "Keine offene Position gefunden."}
         instmap = get_state(conn, "instmap") or {}
         out = []
+        positions_changed = False
         for pos in positions:
             m = instmap.get(pos["instrument"]) or {}
             try:
@@ -208,7 +209,15 @@ async def _route_get(path, query, conn):
                 instmap[pos["instrument"]] = {
                     "instId": snap["resolvedTo"], "instType": snap.get("instType")}
                 set_state(conn, "instmap", instmap)
+            if snap.get("ctValCorrected"):
+                # Dauerhaft uebernehmen, damit der Fehler nicht bei jedem
+                # Laden erneut auftaucht, auch offline/ohne Live-Kurs.
+                pos["ct_val"] = snap["ctVal"]
+                pos["size"] = snap["size"]
+                positions_changed = True
             out.append(snap)
+        if positions_changed:
+            set_state(conn, "positions", positions)
         return {"positions": out}
 
     if path == "/api/portfolio":

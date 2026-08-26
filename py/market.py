@@ -342,9 +342,19 @@ async def snapshot(position, inst_id=None, inst_type=None):
         out["expTime"] = info["expTime"]
         out["instFamily"] = info["instFamily"]
         if info["ctVal"] and info["ctVal"] != D(position["ct_val"]):
+            # Der beim Import geschaetzte Kontraktwert war falsch (Standardwert,
+            # bis hierher konnte niemand den echten kennen). avg_entry ist davon
+            # unabhaengig (kuerzt sich raus), aber size - und alles was davon
+            # abhaengt (Notional, uPnL, Liquidation) - muss neu gerechnet werden,
+            # sonst rechnet der Rest dieser Funktion mit einer falschen Zahl weiter.
+            contracts = D(position.get("contracts", 0))
+            corrected_size = abs(contracts * info["ctVal"])
+            out["ctValCorrected"] = True
+            out["size"] = str(corrected_size if side == "long" else -corrected_size)
+            size = corrected_size
             out["errors"].append(
-                f"Kontraktgröße laut OKX ist {info['ctVal']}, der Import hat "
-                f"mit {position['ct_val']} gerechnet. Zahlen neu einlesen.")
+                f"Kontraktgröße war beim Import falsch geschätzt ({position['ct_val']}) - "
+                f"jetzt mit dem echten Wert ({info['ctVal']}) korrigiert und gespeichert.")
     except MarketError as exc:
         out["errors"].append(f"Kontraktdaten: {exc}")
 

@@ -29,9 +29,30 @@ from pathlib import Path
 
 import ledger as L
 
-# Kontraktgroesse als Rueckfallwert. Der echte Wert kommt aus dem
-# oeffentlichen instruments-Endpunkt, siehe market.py.
+# Kontraktgroesse als Rueckfallwert, nur falls "Trading Unit" fehlt oder nicht
+# lesbar ist. Der echte Wert kommt normalerweise direkt aus der CSV selbst -
+# siehe _parse_trading_unit() - oder aus dem instruments-Endpunkt (market.py).
 DEFAULT_CT_VAL = Decimal("0.0001")
+
+
+def _parse_trading_unit(unit_str):
+    """Die Spalte 'Trading Unit' im echten OKX-Export sagt direkt, was ein
+    Kontrakt wert ist - z.B. '0.001 ETH' bedeutet: 1 Kontrakt = 0.001 ETH.
+    Steht dort nur das Kuerzel ohne Zahl (z.B. 'ETH'), ist Amount schon
+    direkt in der Basiswaehrung angegeben, kein Multiplikator noetig.
+
+    Das ist die zuverlaessigste Quelle ueberhaupt, weil sie in jeder Zeile
+    der Datei selbst steht - unabhaengig von Live-Kursen oder geratenen
+    Standardwerten, die sich je nach Instrument stark unterscheiden."""
+    if not unit_str:
+        return None
+    m = re.match(r"^\s*([\d.]+)", unit_str.strip())
+    if m:
+        try:
+            return Decimal(m.group(1))
+        except Exception:
+            return None
+    return Decimal(1)  # nur ein Kuerzel angegeben, kein Multiplikator -> 1:1
 
 
 class ImportError_(Exception):
@@ -244,9 +265,15 @@ def import_trading(conn, rows, meta, source):
 
 # --- Position aus der Trading History ableiten -----------------------------
 
-def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL):
+def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL, ct_val_map=None):
     """Rekonstruiert offene Futures-Positionen, getrennt je Instrument.
-    Geschlossene Positionen (Saldo null) fallen raus."""
+    Geschlossene Positionen (Saldo null) fallen raus.
+
+    ct_val_map: {instrument: Decimal} - von Hand bestaetigte oder von OKX live
+    aufgeloeste Kontraktgroessen aus frueheren Sitzungen. Greift nur, wenn
+    die Datei selbst keine 'Trading Unit' angibt (aeltere Exporte) - die
+    Spalte in der aktuellen Datei ist immer die zuverlaessigste Quelle."""
+    ct_val_map = ct_val_map or {}
     by_inst = {}
     for r in rows:
         if (r.get("Trade Type") or "").strip() != "Futures":
@@ -260,11 +287,13 @@ def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL):
         if not opens:
             continue
 
+        from_csv = _parse_trading_unit(opens[0].get("Trading Unit"))
+        inst_ct_val = from_csv if from_csv is not None else ct_val_map.get(inst, ct_val)
         contracts = notional = margin = Decimal(0)
         for r in opens:
             side = Decimal(1) if r["Action"].strip() == "Buy" else Decimal(-1)
             c = L.D(r["Amount"])
-            notional += c * ct_val * L.D(r["Filled Price"])
+            notional += c * inst_ct_val * L.D(r["Filled Price"])
             contracts += c * side
             margin += L.D(r["Position Change"])
 
@@ -274,7 +303,7 @@ def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL):
         funding = sum((L.D(r["PnL"]) for r in fut
                        if "Funding fee" in r["Action"]), Decimal(0))
         fees = sum((L.D(r["Fee"]) for r in fut), Decimal(0))
-        size = contracts * ct_val
+        size = contracts * inst_ct_val
         latest = max(fut, key=lambda r: r["Time"])
         base = inst.split("-")[0] if "-" in inst else inst
 
@@ -284,7 +313,7 @@ def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL):
             "side": "long" if contracts > 0 else "short",
             "contracts": contracts,
             "size": size,
-            "ct_val": ct_val,
+            "ct_val": inst_ct_val,
             "avg_entry": (notional / abs(size)) if size else Decimal(0),
             "initial_margin": margin,
             "funding": funding,
@@ -371,7 +400,16 @@ def import_file(conn, path, source=None):
                      "unknown": sorted(unknown)}, ensure_ascii=False)))
     conn.commit()
 
-    positions = derive_positions(rows, meta) if kind == "trading" else []
+    ct_val_map = {}
+    row = conn.execute("SELECT value FROM app_state WHERE key = 'instmap'").fetchone()
+    if row:
+        try:
+            for inst, m in json.loads(row["value"]).items():
+                if m.get("ctVal"):
+                    ct_val_map[inst] = L.D(m["ctVal"])
+        except (ValueError, TypeError, KeyError):
+            pass
+    positions = derive_positions(rows, meta, ct_val_map=ct_val_map) if kind == "trading" else []
 
     return {
         "kind": kind,
