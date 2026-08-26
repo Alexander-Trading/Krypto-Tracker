@@ -561,10 +561,7 @@ function dash(){
     <div class="tile"><div class="tile-k">Ergebnis gesamt</div>
       <div class="tile-v ${res>=0?"up":"down"}">${res!=null?sgn(res)+" €":"–"}</div>
       <div class="tile-s">${pct!=null?sgn(pct)+" %":""}</div></div>
-    <div class="tile"><div class="tile-k">Realisiert${latestY?" "+latestY.year:""}</div>
-      <div class="tile-v ${realized>=0?"up":"down"}">${realized!=null?sgn(realized)+" €":"–"}</div>
-      <div class="tile-s">§20-Ergebnis + §23-Veräußerungsgewinn</div></div>
-    <div class="tile"><div class="tile-k">Unrealisiert</div>
+    <div class="tile" style="grid-column:1/-1"><div class="tile-k">Unrealisiert</div>
       <div class="tile-v ${(adj.unrealizedEur??upnl)>=0?"up":"down"}">${
         adj.unrealizedEur!=null ? sgn(adj.unrealizedEur)+" €"
         : upnl!=null ? sgn(upnl)+" "+esc(pos&&pos.settle_ccy||"") : "–"}</div>
@@ -682,17 +679,16 @@ function feesCard(){
     || Object.keys(FEES.fundingPaid||{}).length;
   if(!has) return "";
   const net = fmtNetAssetSum(FEES.fundingReceived, FEES.fundingPaid, FEES.feesPaid);
-  return `<div class="sect">Gebühren &amp; Funding</div><div class="card">
-    <div class="stats">
-      <div class="stat"><div class="tile-k">Funding erhalten</div>
-        <div class="tile-v up" style="font-size:17px">${fmtAssetSum(FEES.fundingReceived)}</div></div>
-      <div class="stat"><div class="tile-k">Funding gezahlt</div>
-        <div class="tile-v down" style="font-size:17px">${fmtAssetSum(FEES.fundingPaid)}</div></div>
-      <div class="stat"><div class="tile-k">Gebühren gezahlt</div>
-        <div class="tile-v down" style="font-size:17px">${fmtAssetSum(FEES.feesPaid)}</div></div>
-      <div class="stat"><div class="tile-k">Gesamt</div>
-        <div class="tile-v ${net.up?"up":"down"}" style="font-size:17px">${net.text}</div></div>
-    </div></div>`;
+  return `<div class="sect">Gebühren &amp; Funding</div><div class="grid">
+    <div class="tile"><div class="tile-k">Funding erhalten</div>
+      <div class="tile-v up">${fmtAssetSum(FEES.fundingReceived)}</div></div>
+    <div class="tile"><div class="tile-k">Funding gezahlt</div>
+      <div class="tile-v down">${fmtAssetSum(FEES.fundingPaid)}</div></div>
+    <div class="tile"><div class="tile-k">Gebühren gezahlt</div>
+      <div class="tile-v down">${fmtAssetSum(FEES.feesPaid)}</div></div>
+    <div class="tile"><div class="tile-k">Gesamt</div>
+      <div class="tile-v ${net.up?"up":"down"}">${net.text}</div></div>
+  </div>`;
 }
 
 function statusCard(){
