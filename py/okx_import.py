@@ -38,21 +38,20 @@ DEFAULT_CT_VAL = Decimal("0.0001")
 def _parse_trading_unit(unit_str):
     """Die Spalte 'Trading Unit' im echten OKX-Export sagt direkt, was ein
     Kontrakt wert ist - z.B. '0.001 ETH' bedeutet: 1 Kontrakt = 0.001 ETH.
-    Steht dort nur das Kuerzel ohne Zahl (z.B. 'ETH'), ist Amount schon
-    direkt in der Basiswaehrung angegeben, kein Multiplikator noetig.
-
-    Das ist die zuverlaessigste Quelle ueberhaupt, weil sie in jeder Zeile
-    der Datei selbst steht - unabhaengig von Live-Kursen oder geratenen
-    Standardwerten, die sich je nach Instrument stark unterscheiden."""
+    Nur nutzbar, wenn dort wirklich eine Zahl vor dem Kuerzel steht. Steht
+    dort nur das Kuerzel ohne Zahl (z.B. einfach 'BTC'), ist NICHT gesagt,
+    dass Amount schon direkt in der Basiswaehrung ist - das war ein Fehlschluss
+    und hat BTC falsch angezeigt. In dem Fall lieber None zurueckgeben und
+    auf den bekannten Schaetzwert zurueckfallen, statt zu raten."""
     if not unit_str:
         return None
-    m = re.match(r"^\s*([\d.]+)", unit_str.strip())
+    m = re.match(r"^\s*([\d.]+)\s*[A-Za-z]", unit_str.strip())
     if m:
         try:
             return Decimal(m.group(1))
         except Exception:
             return None
-    return Decimal(1)  # nur ein Kuerzel angegeben, kein Multiplikator -> 1:1
+    return None  # nur ein Kuerzel, keine Zahl davor -> auf Schaetzwert zurueckfallen
 
 
 class ImportError_(Exception):
