@@ -91,14 +91,6 @@ def build_state(conn):
     for row in buckets:
         totals[row["tax_bucket"]] = totals.get(row["tax_bucket"], 0) + row["n"]
 
-    snap_ts = conn.execute("SELECT MAX(ts_utc) FROM balance_snapshots").fetchone()[0]
-    recon = None
-    if snap_ts:
-        reported = {r["asset"]: r["amount"] for r in conn.execute(
-            "SELECT asset, amount FROM balance_snapshots WHERE ts_utc = ?", (snap_ts,))}
-        recon = [{k: jsonable(v) for k, v in row.items()}
-                 for row in L.reconcile(conn, reported)]
-
     span = conn.execute("SELECT MIN(ts_utc), MAX(ts_utc) FROM transactions").fetchone()
 
     return {
@@ -109,8 +101,6 @@ def build_state(conn):
         "buckets": buckets,
         "bucketTotals": totals,
         "unknown": L.unknown_count(conn),
-        "reconciliation": recon,
-        "snapshotAt": snap_ts,
         "positions": get_state(conn, "positions") or [],
         "imports": [dict(r) for r in conn.execute(
             "SELECT filename, rows_read, rows_imported, started_at, note "
@@ -180,10 +170,6 @@ def seed_demo(conn):
             source="demo", external_id=ext, note=note,
             entries=[L.Entry(a, amt, kind) for a, amt, kind in entries],
         ))
-    conn.execute(
-        "INSERT OR REPLACE INTO balance_snapshots (ts_utc, account, asset, amount) "
-        "VALUES (?, ?, ?, ?)",
-        (L.now_utc(), "gesamt", "USDC", "5484.20"))
     conn.commit()
 
 
@@ -231,9 +217,10 @@ async def _route_get(path, query, conn):
         if fmt == "pdf":
             if not PDF_AVAILABLE:
                 return {"__error__":
-                    "Für den PDF-Export wird das Paket „reportlab“ benötigt. Im Browser "
-                    "lässt sich das aktuell nicht automatisch nachinstallieren - CSV "
-                    "funktioniert aber ganz normal."}
+                    "PDF-Export ist gerade nicht verfügbar - vermutlich konnte beim "
+                    "Laden der Seite kein Netzwerkzugriff auf PyPI/jsDelivr hergestellt "
+                    "werden (z.B. wegen einer Firewall oder eines Werbeblockers). Seite "
+                    "neu laden und nochmal versuchen, oder CSV exportieren."}
             years = [y["year"] for y in rep["years"]]
             if not years:
                 return {"__error__": "Keine Vorgänge für einen Report."}
@@ -385,16 +372,6 @@ async def _route_post(path, body, conn):
                                    "instType": body.get("instType", "FUTURES")}
         set_state(conn, "instmap", instmap)
         return {"ok": True, "instmap": instmap}
-
-    if path == "/api/snapshot":
-        ts = L.now_utc()
-        for asset, amount in (body.get("balances") or {}).items():
-            conn.execute(
-                "INSERT OR REPLACE INTO balance_snapshots "
-                "(ts_utc, account, asset, amount) VALUES (?, ?, ?, ?)",
-                (ts, "gesamt", asset.upper().strip(), L.dstr(L.D(amount))))
-        conn.commit()
-        return build_state(conn)
 
     return {"__error__": "Nicht gefunden", "__status__": 404}
 
