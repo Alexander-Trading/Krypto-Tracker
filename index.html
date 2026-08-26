@@ -571,7 +571,7 @@ function dash(){
         : "Kurs fehlt"}</div></div>
   </div>`;
 
-  return hero + curveCard + tiles + feesCard() + statusCard() + recentCard();
+  return hero + curveCard + tiles + feesCard() + recentCard();
 }
 
 /* --- Kapitalkurve ------------------------------------------------------- */
@@ -689,40 +689,6 @@ function feesCard(){
     <div class="tile"><div class="tile-k">Gesamt</div>
       <div class="tile-v ${net.up?"up":"down"}">${net.text}</div></div>
   </div>`;
-}
-
-function statusCard(){
-  const rec = STATE.reconciliation;
-  const unk = STATE.unknown||0;
-  if(!rec) return `<div class="sect">Abgleich</div><div class="card">
-    <div class="status"><span class="badge neu">?</span>
-      <div><div class="st-t">Noch nicht abgeglichen</div>
-      <div class="st-s">Trag ein, was OKX als Bestand anzeigt.</div></div></div>
-    <div class="kv" style="border-top:1px solid var(--line)">
-      <input class="mini" id="sA" placeholder="USDC" aria-label="Währung">
-      <input class="mini" id="sV" placeholder="1725.71" aria-label="Betrag laut OKX">
-      <button class="act" id="sB">Eintragen</button></div></div>`;
-
-  const bad = rec.filter(r=>!r.ok);
-  const max = Math.max(...rec.map(r=>Math.abs(N(r.diff))), 1e-12);
-  const rows = rec.map(r=>{const d=N(r.diff), w=Math.min(46,Math.abs(d)/max*42);
-    return `<div class="recon-row"><span class="mono" style="font-size:12.5px">${esc(r.asset)}</span>
-      <span class="rtrack">${r.ok?'<span class="rdot"></span>'
-        :`<span class="rbar" style="${d<0?"right:50%":"left:50%"};width:${w}%"></span>`}</span>
-      <span class="amt" style="color:${r.ok?"var(--dim)":"var(--down)"}">${
-        r.ok?"stimmt":nf(d,4)}</span></div>`;}).join("");
-
-  return `<div class="sect">Abgleich</div><div class="card">
-    <div class="status"><span class="badge ${bad.length||unk?"bad":"ok"}">${
-      bad.length||unk?"!":"✓"}</span>
-      <div><div class="st-t">${bad.length
-        ? plural(bad.length,"Abweichung","Abweichungen")
-        : unk ? plural(unk,"Vorgang ungeklärt","Vorgänge ungeklärt") : "Alles stimmt"}</div>
-      <div class="st-s">${bad.length
-        ? "Es fehlen Vorgänge oder sie sind falsch gebucht."
-        : unk ? "Diese Vorgänge blockieren den Steuerreport."
-        : `Ledger und OKX stimmen überein, Stand ${day(STATE.snapshotAt)}.`}</div></div>
-    </div>${rows}</div>`;
 }
 
 function recentCard(){
@@ -1292,12 +1258,6 @@ function render(){
   else if(TAB==="review"){ p.innerHTML=reviewPanel(); loadReview(); }
   else if(TAB==="tax"){ p.innerHTML=taxPanel(); wireTax(); }
   else if(TAB==="import"){ p.innerHTML=importPanel(); wireDrop(); }
-
-  if($("#sB")) $("#sB").onclick=async()=>{
-    const a=$("#sA").value.trim(), v=$("#sV").value.trim();
-    if(!a||!v) return;
-    STATE=await api("/api/snapshot",{balances:{[a]:v}}); render();
-  };
   managePosAutoRefresh();
 }
 
@@ -1599,7 +1559,7 @@ window.pyReady = (async () => {
       pyodide.FS.syncfs(true, err => err ? rej(err) : res()));
 
     const files = ["ledger.py", "tax.py", "okx_import.py", "market.py",
-                    "webapi.py", "schema.sql"];
+                    "webapi.py", "pdf_report.py", "schema.sql"];
     for (const f of files) {
       const resp = await fetch("py/" + f);
       if (!resp.ok) {
@@ -1616,10 +1576,29 @@ window.pyReady = (async () => {
       }
       pyodide.FS.writeFile("/" + f, text);
     }
-    // pdf_report.py bewusst nicht geladen: braucht reportlab, das in
-    // Pyodide nicht standardmaessig verfuegbar ist. webapi.py faengt das
-    // ab (PDF_AVAILABLE = False) und der PDF-Button zeigt eine klare
-    // Meldung statt abzustuerzen - CSV bleibt der zuverlaessige Weg.
+
+    // PDF-Export: reportlab hat seit Version 5 einen reinen Python-Wheel
+    // (kein Kompilat mehr) - laesst sich also per micropip von PyPI
+    // installieren. Die einzige Abhaengigkeit, die reportlab intern immer
+    // laedt (Pillow, fuer Bildverarbeitung, auch wenn unser Report keine
+    // Bilder nutzt), ist ein von Pyodide selbst vorkompiliertes Paket -
+    // kommt vom offiziellen Pyodide-CDN (jsDelivr), nicht von PyPI.
+    // Schlaegt einer der Schritte fehl (z.B. kein Netzwerk), bleibt PDF
+    // einfach unverfuegbar - webapi.py faengt das ab, CSV geht immer.
+    try {
+      await pyodide.loadPackage("pyodide-pkgs/micropip.whl");
+      await pyodide.runPythonAsync(`
+import micropip
+await micropip.install(
+    "https://cdn.jsdelivr.net/pyodide/v${pyodide.version}/full/"
+    "pillow-12.2.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl")
+await micropip.install("reportlab")
+`);
+    } catch (e) {
+      console.warn("PDF-Export nicht verfügbar (reportlab/Pillow konnten nicht "+
+                   "geladen werden - vermutlich kein Netzwerkzugriff auf PyPI/"+
+                   "jsDelivr von hier aus). CSV-Export bleibt unberührt.", e);
+    }
 
     await pyodide.runPythonAsync(`
 import sys
