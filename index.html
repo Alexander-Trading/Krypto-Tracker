@@ -151,6 +151,12 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 
 /* Kacheln */
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+.grid3{display:grid;gap:8px;grid-template-columns:repeat(3,1fr)}
+.grid4{display:grid;gap:8px;grid-template-columns:repeat(4,1fr)}
+@media (max-width:520px){
+  .grid4{grid-template-columns:repeat(2,1fr)}
+}
+.grid2{display:grid;gap:12px;grid-template-columns:repeat(2,1fr)}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:14px;
   padding:16px 18px}
 .tile-k{font-family:var(--mono);font-size:10px;letter-spacing:.12em;
@@ -554,14 +560,17 @@ function dash(){
     ? TAXR.years[TAXR.years.length-1] : null;
   const realized = latestY ? N(latestY.par20.result) + N(latestY.par23.gain) : null;
 
-  const tiles = `<div class="grid" style="margin-top:12px">
+  const tiles = `<div class="grid4" style="margin-top:12px">
     <div class="tile"><div class="tile-k">Eingezahlt</div>
       <div class="tile-v">${eur(dep)}</div>
       <div class="tile-s">${plural(STATE.bucketTotals.neutral||0,"Vorgang","Vorgänge")}</div></div>
     <div class="tile"><div class="tile-k">Ergebnis gesamt</div>
       <div class="tile-v ${res>=0?"up":"down"}">${res!=null?sgn(res)+" €":"–"}</div>
       <div class="tile-s">${pct!=null?sgn(pct)+" %":""}</div></div>
-    <div class="tile" style="grid-column:1/-1"><div class="tile-k">Unrealisiert</div>
+    <div class="tile"><div class="tile-k">Realisiert${latestY?" "+latestY.year:""}</div>
+      <div class="tile-v ${realized>=0?"up":"down"}">${realized!=null?sgn(realized)+" €":"–"}</div>
+      <div class="tile-s">§20-Ergebnis + §23-Veräußerungsgewinn</div></div>
+    <div class="tile"><div class="tile-k">Unrealisiert</div>
       <div class="tile-v ${(adj.unrealizedEur??upnl)>=0?"up":"down"}">${
         adj.unrealizedEur!=null ? sgn(adj.unrealizedEur)+" €"
         : upnl!=null ? sgn(upnl)+" "+esc(pos&&pos.settle_ccy||"") : "–"}</div>
@@ -679,7 +688,7 @@ function feesCard(){
     || Object.keys(FEES.fundingPaid||{}).length;
   if(!has) return "";
   const net = fmtNetAssetSum(FEES.fundingReceived, FEES.fundingPaid, FEES.feesPaid);
-  return `<div class="sect">Gebühren &amp; Funding</div><div class="grid">
+  return `<div class="sect">Gebühren &amp; Funding</div><div class="grid2">
     <div class="tile"><div class="tile-k">Funding erhalten</div>
       <div class="tile-v up">${fmtAssetSum(FEES.fundingReceived)}</div></div>
     <div class="tile"><div class="tile-k">Funding gezahlt</div>
