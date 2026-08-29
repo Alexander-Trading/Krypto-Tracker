@@ -580,7 +580,24 @@ function dash(){
         : "Kurs fehlt"}</div></div>
   </div>`;
 
-  return hero + curveCard + tiles + feesCard() + recentCard();
+  // Ergebnis gesamt = Realisiert + Unrealisiert + Wechselkurseffekt auf den
+  // Rest des Bestands (z.B. freies USDC/USDT, das weder realisiert noch Teil
+  // der offenen Position ist, aber zum heutigen statt zum Buchungstags-Kurs
+  // bewertet wird). Ohne diese dritte Komponente gehen die Zahlen scheinbar
+  // nicht auf - ist aber kein Fehler, nur bisher unsichtbar gewesen.
+  const fxNote = (res!=null && realized!=null && adj.unrealizedEur!=null)
+    ? (() => {
+        const fx = res - realized - adj.unrealizedEur;
+        if(!Number.isFinite(fx) || Math.abs(fx) < 0.01) return "";
+        return `<div class="tag" style="margin-top:10px;
+          display:block;padding:8px 10px;font-size:11px;line-height:1.5;
+          background:var(--panel-2);color:var(--dim)">Ergebnis gesamt = Realisiert +
+          Unrealisiert ${fx>=0?"+":"−"} ${nf(Math.abs(fx))} € Wechselkurseffekt auf den
+          übrigen Bestand (z.B. freies USDC/USDT, heute statt zum Buchungstag bewertet).</div>`;
+      })()
+    : "";
+
+  return hero + curveCard + tiles + fxNote + feesCard() + recentCard();
 }
 
 /* --- Kapitalkurve ------------------------------------------------------- */
@@ -731,7 +748,8 @@ function posCard(p, mk){
   const st=(k,v,s,c)=>`<div class="stat"><div class="tile-k">${k}</div>
     <div class="tile-v ${c||""}">${v}</div>${s?`<div class="tile-s">${s}</div>`:""}</div>`;
 
-  const stats = st("Größe", nfTrim(p.size)+" "+esc(p.base||""),
+  const displaySize = (live && mk.ctValCorrected && mk.size!=null) ? mk.size : p.size;
+  const stats = st("Größe", nfTrim(displaySize)+" "+esc(p.base||""),
       nf(p.contracts,0)+" Kontrakte")
     + st("Ø Einstieg", nf(entry)+" USD")
     + st("Mark-Preis", mark?nf(mark)+" USD":"–", mark?"live":"nicht abrufbar")
@@ -1462,7 +1480,17 @@ window.go=go;
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>go(t.dataset.tab));
 
 async function refreshMarket(){
-  try{ MARKET=(await api("/api/market")).positions||null; }
+  try{
+    MARKET=(await api("/api/market")).positions||null;
+    // Wurde gerade eine falsch geschaetzte Kontraktgroesse live korrigiert,
+    // ist das zwar schon dauerhaft gespeichert, aber STATE.positions (und
+    // damit die "Größe"-Anzeige) haengt noch auf dem alten Stand, bis wir
+    // neu laden - sonst zeigt "Größe" den alten Wert, obwohl uPnL/Margin
+    // schon mit dem richtigen rechnen.
+    if((MARKET||[]).some(m=>m.ctValCorrected)){
+      STATE = await api("/api/state");
+    }
+  }
   catch(e){ MARKET=[{errors:[String(e.message||e)]}]; }
   if(TAB==="positions"||TAB==="dash") render();
 }
