@@ -330,6 +330,16 @@ def dec2str(o):
     return o
 
 
+ALL_BUCKETS = ["par23", "par20", "par22", "neutral", "unknown"]
+BUCKET_LABELS = {
+    "par23": "§ 23 — Private Veräußerungsgeschäfte",
+    "par20": "§ 20 — Termingeschäfte (Futures)",
+    "par22": "§ 22 — Sonstige Einkünfte",
+    "neutral": "Neutral (kein Steuerereignis)",
+    "unknown": "Unklar (noch nicht zugeordnet)",
+}
+
+
 async def build_report(conn, fetcher=None):
     assets = [r[0] for r in conn.execute("SELECT DISTINCT asset FROM entries")]
     days = [r[0] for r in conn.execute(
@@ -359,6 +369,7 @@ async def build_report(conn, fetcher=None):
         r20 = e20["eur"] if e20 else Decimal(0)
         rows20 = bucket_rows(conn, "par20", y, table)
         rows22 = bucket_rows(conn, "par22", y, table)
+        all_by_bucket = {b: bucket_rows(conn, b, y, table) for b in ALL_BUCKETS}
 
         # Manueller Verlustvortrag: mindert den Gewinn/das Ergebnis des Jahres,
         # bevor Freigrenze bzw. Steuerpflicht geprueft wird. Keine automatische
@@ -410,6 +421,7 @@ async def build_report(conn, fetcher=None):
                 "taxable": sum22_after if sum22_after > FREIGRENZE_22 else Decimal(0),
                 "rows": rows22,
             },
+            "allByBucket": all_by_bucket,
         })
 
     unknown = conn.execute(
@@ -558,45 +570,124 @@ async def capital_curve(conn, fetcher=None, points=24):
 # --- CSV -------------------------------------------------------------------
 
 def money(v):
-    """Zwei Nachkommastellen, deutsches Dezimalkomma."""
+    """Zwei Nachkommastellen, deutsches Dezimalkomma. Fuer PDF/Anzeige."""
     if v in (None, ""):
         return ""
     return format(Decimal(str(v)).quantize(Decimal("0.01")), "f").replace(".", ",")
 
 
+def num(v, places="0.01"):
+    """Zwei Nachkommastellen, Punkt als Dezimaltrennzeichen - echte, von
+    Tabellenkalkulationen als Zahl erkennbare Werte statt lokalisiertem Text."""
+    if v in (None, ""):
+        return ""
+    return format(Decimal(str(v)).quantize(Decimal(places)), "f")
+
+
+def _csv_row(cols):
+    """Escaped fuer ';'-getrennte CSV: Felder mit ';', '"' oder Zeilenumbruch
+    werden in Anfuehrungszeichen gesetzt, enthaltene '"' verdoppelt."""
+    out = []
+    for c in cols:
+        c = "" if c is None else str(c)
+        if any(ch in c for ch in (";", '"', "\n")):
+            c = '"' + c.replace('"', '""') + '"'
+        out.append(c)
+    return ";".join(out)
+
+
+TX_TYPE_LABELS = {
+    "deposit": "Einzahlung", "withdrawal": "Auszahlung", "transfer": "Umbuchung",
+    "trade_spot": "Tausch", "trade_derivative": "Futures",
+    "funding_fee": "Finanzierungsrate", "fee": "Gebühr",
+    "earn_reward": "Earn-Gutschrift", "adjustment": "Korrektur",
+}
+
+
 def report_csv(report):
-    lines = ["Abschnitt;Jahr;Feld;Wert;Waehrung"]
+    """Baut drei klar getrennte, jeweils in sich einheitliche Tabellen:
+    Kennzahlen je Jahr/Topf, eine Buchungszeile pro Vorgang (feste Spalten,
+    egal ob §23/§20/§22), und die offenen (noch nicht verkauften) Bestaende.
+    Zahlen stehen als echte Dezimalzahlen mit Punkt, nicht als lokalisierter
+    Text - damit Excel/Numbers/Sheets sie direkt als Zahl erkennen und man
+    filtern/summieren/pivotieren kann, ohne vorher Text-in-Zahlen umzuwandeln.
+    """
+    lines = []
+
+    lines.append("# KENNZAHLEN")
+    lines.append(_csv_row(["Jahr", "Steuertopf", "Kennzahl", "Wert_EUR"]))
     for y in report["years"]:
         yr = y["year"]
-        lines += [
-            f"§23;{yr};Gewinn steuerpflichtige Veraeusserungen;{money(y['par23']['gain'])};EUR",
-            f"§23;{yr};Verlustvortrag;{money(y['par23']['lossCarryIn'])};EUR",
-            f"§23;{yr};Gewinn nach Verlustvortrag;{money(y['par23']['gainAfterCarry'])};EUR",
-            f"§23;{yr};Freigrenze;{money(y['par23']['freigrenze'])};EUR",
-            f"§23;{yr};Steuerpflichtig nach Freigrenze;{money(y['par23']['taxable'])};EUR",
-            f"§20;{yr};Ergebnis Termingeschaefte;{money(y['par20']['result'])};EUR",
-            f"§20;{yr};Verlustvortrag;{money(y['par20']['lossCarryIn'])};EUR",
-            f"§20;{yr};Ergebnis nach Verlustvortrag;{money(y['par20']['resultAfterCarry'])};EUR",
-            f"§22;{yr};Sonstige Einkuenfte;{money(y['par22']['result'])};EUR",
-            f"§22;{yr};Verlustvortrag;{money(y['par22']['lossCarryIn'])};EUR",
-            f"§22;{yr};Steuerpflichtig nach Freigrenze;{money(y['par22']['taxable'])};EUR",
+        kz = [
+            ("§23", "Gewinn steuerpflichtige Veraeusserungen", y["par23"]["gain"]),
+            ("§23", "Verlustvortrag", y["par23"]["lossCarryIn"]),
+            ("§23", "Gewinn nach Verlustvortrag", y["par23"]["gainAfterCarry"]),
+            ("§23", "Freigrenze", y["par23"]["freigrenze"]),
+            ("§23", "Steuerpflichtig nach Freigrenze", y["par23"]["taxable"]),
+            ("§20", "Ergebnis Termingeschaefte", y["par20"]["result"]),
+            ("§20", "Verlustvortrag", y["par20"]["lossCarryIn"]),
+            ("§20", "Ergebnis nach Verlustvortrag", y["par20"]["resultAfterCarry"]),
+            ("§22", "Sonstige Einkuenfte", y["par22"]["result"]),
+            ("§22", "Verlustvortrag", y["par22"]["lossCarryIn"]),
+            ("§22", "Steuerpflichtig nach Freigrenze", y["par22"]["taxable"]),
         ]
-        for d in y["par23"]["disposals"]:
-            lines.append(
-                f"§23-Detail;{yr};{d['asset']} {d['qty']} erworben {d['acquired']} "
-                f"veraeussert {d['sold']} ({d['held_days']} Tage, "
-                f"{'steuerpflichtig' if d['taxable'] else 'steuerfrei'});"
-                f"{money(d['gain_eur'])};EUR")
-        for r in y["par20"]["rows"]:
-            desc = (r["note"] or r["txType"] or "").replace(";", ",")
-            lines.append(f"§20-Detail;{yr};{r['date']} {desc};{money(r['eur'])};EUR")
-        for r in y["par22"]["rows"]:
-            desc = (r["note"] or r["txType"] or "").replace(";", ",")
-            lines.append(f"§22-Detail;{yr};{r['date']} {desc};{money(r['eur'])};EUR")
+        for topf, feld, wert in kz:
+            lines.append(_csv_row([yr, topf, feld, num(wert)]))
 
     lines.append("")
-    lines.append("Offene Bestaende;Asset;Menge;Angeschafft;Steuerfrei ab;Tage")
+    lines.append("# BUCHUNGEN")
+    lines.append(_csv_row([
+        "Jahr", "Steuertopf", "Datum", "Typ", "Beschreibung", "Menge", "Asset",
+        "Erworben_am", "Haltedauer_Tage", "Steuerpflichtig",
+        "Native_Buchungszeilen", "Betrag_EUR",
+    ]))
+    for y in report["years"]:
+        yr = y["year"]
+        for d in y["par23"]["disposals"]:
+            lines.append(_csv_row([
+                yr, "§23", d["sold"], "Verkauf", d["note"] or "",
+                num(d["qty"], "0.00000001"), d["asset"], d["acquired"],
+                d["held_days"], "Ja" if d["taxable"] else "Nein", "",
+                num(d["gain_eur"]),
+            ]))
+        for topf, key in (("§20", "par20"), ("§22", "par22")):
+            for r in y[key]["rows"]:
+                native = "; ".join(
+                    f"{num(n['amount'], '0.00000001')} {n['asset']}"
+                    + (" (Gebühr)" if n["kind"] == "fee" else "")
+                    for n in r["native"])
+                lines.append(_csv_row([
+                    yr, topf, r["date"], TX_TYPE_LABELS.get(r["txType"], r["txType"]),
+                    r["note"] or "", "", "", "", "", "", native, num(r["eur"]),
+                ]))
+
+    lines.append("")
+    lines.append("# OFFENE_BESTAENDE")
+    lines.append(_csv_row(["Asset", "Menge", "Erworben_am", "Steuerfrei_ab", "Tage_bis_steuerfrei"]))
     for lot in report["openLots"]:
-        lines.append(f";{lot['asset']};{lot['qty']};{lot['acquired']};"
-                     f"{lot['free_on']};{lot['days_to_free']}")
+        lines.append(_csv_row([
+            lot["asset"], num(lot["qty"], "0.00000001"), lot["acquired"],
+            lot["free_on"], lot["days_to_free"],
+        ]))
+
+    lines.append("")
+    lines.append("# ALLE_BUCHUNGEN (jede Transaktion, nach Steuertopf - auch neutrale)")
+    lines.append(_csv_row([
+        "Jahr", "Steuertopf", "Datum", "Typ", "Beschreibung",
+        "Native_Buchungszeilen", "Betrag_EUR",
+    ]))
+    for y in report["years"]:
+        yr = y["year"]
+        for bucket in ALL_BUCKETS:
+            for r in y["allByBucket"].get(bucket, []):
+                native = "; ".join(
+                    f"{num(n['amount'], '0.00000001')} {n['asset']}"
+                    + (" (Gebühr)" if n["kind"] == "fee" else "")
+                    for n in r["native"])
+                lines.append(_csv_row([
+                    yr, BUCKET_LABELS[bucket], r["date"],
+                    TX_TYPE_LABELS.get(r["txType"], r["txType"]),
+                    r["note"] or "", native, num(r["eur"]),
+                ]))
+
     return "\n".join(lines)
