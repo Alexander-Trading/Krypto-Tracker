@@ -154,11 +154,18 @@ def _cover(report, year, meta_text, styles):
         "unter Freigrenze" if not p23["exceeded"] else "Freigrenze überschritten",
         not p23["exceeded"], "par23"))
     flow.append(Spacer(1, 8))
+    p20_loss = p20["result"] < 0
+    p20_status = (
+        "Jahresverlust" if p20_loss else
+        "durch Verlustvortrag ausgeglichen" if p20["resultAfterCarry"] <= 0 else
+        "Sparerpauschbetrag überschritten" if p20["exceeded"] else
+        "unter Sparerpauschbetrag")
     flow.append(_pot_table(
         styles, "§ 20 EStG · Anlage KAP", "Termingeschäfte",
         f"{p20['count']} Buchungen"
-        + (f" · Verlustvortrag {_money(p20['lossCarryIn'])}" if p20["lossCarryIn"] else ""),
-        p20["resultAfterCarry"], "Sparerpauschbetrag beachten", True, "par20"))
+        + (f" · Verlustvortrag {_money(p20['lossCarryIn'])}" if p20["lossCarryIn"] else "")
+        + (f" · Sparerpauschbetrag {_money(p20['sparerpauschbetrag'])}" if not p20_loss else ""),
+        p20["taxable"], p20_status, not p20["exceeded"], "par20"))
     flow.append(Spacer(1, 8))
     flow.append(_pot_table(
         styles, "§ 22 Nr. 3 EStG", "Sonstige Einkünfte",

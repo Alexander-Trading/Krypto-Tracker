@@ -26,6 +26,7 @@ import ledger as L
 
 FREIGRENZE_23 = {2023: Decimal(600), 2024: Decimal(1000)}   # ab 2024: 1.000
 FREIGRENZE_22 = Decimal(256)
+SPARERPAUSCHBETRAG = Decimal(1000)   # § 20 EStG / Anlage KAP, Einzelveranlagung
 HALTEFRIST_TAGE = 365
 
 # Als EUR-Gegenwert gilt 1:1 - der Euro ist die Bezugswaehrung.
@@ -36,6 +37,18 @@ def freigrenze_23(year):
     if year >= 2024:
         return Decimal(1000)
     return Decimal(600)
+
+
+def result_after_carry(raw, carry_in):
+    """Verlustvortrag mindert nur einen tatsaechlichen Gewinn, druecht ein
+    Ergebnis aber nie unter den echten Jahresverlust. Ein Jahresverlust wird
+    unveraendert ausgewiesen (nicht mit einem alten, viel groesseren Vortrag
+    zu einer irrefuehrenden Summe verrechnet); ein Gewinn wird um den Vortrag
+    gemindert, aber nie unter 0 gedrueckt (ungenutzter Vortrag verfaellt hier
+    nicht automatisch, er muesste im Folgejahr manuell neu erfasst werden)."""
+    if raw < 0:
+        return raw
+    return max(raw - carry_in, Decimal(0))
 
 
 def year_of(ts):
@@ -379,7 +392,9 @@ async def build_report(conn, fetcher=None):
         c20 = carry.get((y, "par20"), {}).get("amount", Decimal(0))
         c22 = carry.get((y, "par22"), {}).get("amount", Decimal(0))
         gain_after = gain - c23
-        r20_after = r20 - c20
+        r20_after = result_after_carry(r20, c20)
+        r20_taxable = (max(r20_after - SPARERPAUSCHBETRAG, Decimal(0))
+                      if r20 >= 0 else r20_after)
         sum22_after = sum22 - c22
 
         out_years.append({
@@ -399,6 +414,9 @@ async def build_report(conn, fetcher=None):
                 "result": r20,
                 "lossCarryIn": c20,
                 "resultAfterCarry": r20_after,
+                "sparerpauschbetrag": SPARERPAUSCHBETRAG,
+                "exceeded": r20 >= 0 and r20_after > SPARERPAUSCHBETRAG,
+                "taxable": r20_taxable,
                 "native": e20["native"] if e20 else {},
                 "byKind": e20["by_kind"] if e20 else {},
                 "count": len(rows20),
@@ -627,6 +645,8 @@ def report_csv(report):
             ("§20", "Ergebnis Termingeschaefte", y["par20"]["result"]),
             ("§20", "Verlustvortrag", y["par20"]["lossCarryIn"]),
             ("§20", "Ergebnis nach Verlustvortrag", y["par20"]["resultAfterCarry"]),
+            ("§20", "Sparerpauschbetrag", y["par20"]["sparerpauschbetrag"]),
+            ("§20", "Steuerpflichtig nach Sparerpauschbetrag", y["par20"]["taxable"]),
             ("§22", "Sonstige Einkuenfte", y["par22"]["result"]),
             ("§22", "Verlustvortrag", y["par22"]["lossCarryIn"]),
             ("§22", "Steuerpflichtig nach Freigrenze", y["par22"]["taxable"]),
