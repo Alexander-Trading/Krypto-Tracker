@@ -21,6 +21,9 @@ from reportlab.platypus import (
     SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle, PageBreak, HRFlowable
 )
 from reportlab.pdfbase.pdfmetrics import stringWidth
+from reportlab.pdfgen.canvas import Canvas
+
+import tax as TAX
 
 # Dieselben Farben wie im Dashboard, damit ein Topf auf jeder Seite
 # wiederzuerkennen ist.
@@ -28,6 +31,8 @@ COL = {
     "par23": colors.HexColor("#1F9D74"),
     "par20": colors.HexColor("#3D6FD1"),
     "par22": colors.HexColor("#B3811F"),
+    "neutral": colors.HexColor("#6B7484"),
+    "unknown": colors.HexColor("#C0392B"),
 }
 INK = colors.HexColor("#151A2B")
 DIM = colors.HexColor("#6B7484")
@@ -122,6 +127,27 @@ def _pot_table(styles, law, name, meta, value, status_text, status_ok, bucket_ke
     return outer
 
 
+def _bar(pct, fill_color, width_mm=165, height_mm=2.2, bg=LINE):
+    """Schmaler Fortschrittsbalken (z.B. genutzter Verlustvortrag), passend
+    zur Breite der Pot-Tabelle."""
+    pct = max(0, min(100, pct))
+    fw = width_mm * pct / 100
+    cells = [[""]] if fw <= 0 else [["", ""]]
+    widths = [width_mm] if fw <= 0 else [fw, width_mm - fw]
+    t = Table(cells, colWidths=[w * mm for w in widths], rowHeights=[height_mm * mm])
+    style = [
+        ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]
+    if fw <= 0:
+        style.append(("BACKGROUND", (0, 0), (0, 0), bg))
+    else:
+        style.append(("BACKGROUND", (0, 0), (0, 0), fill_color))
+        style.append(("BACKGROUND", (1, 0), (1, 0), bg))
+    t.setStyle(TableStyle(style))
+    return t
+
+
 def _cover(report, year, meta_text, styles):
     y = next(v for v in report["years"] if v["year"] == year)
     flow = [
@@ -149,11 +175,50 @@ def _cover(report, year, meta_text, styles):
         "unter Freigrenze" if not p23["exceeded"] else "Freigrenze überschritten",
         not p23["exceeded"], "par23"))
     flow.append(Spacer(1, 8))
+    p20_loss = p20["result"] < 0
+    p20_status = "Jahresverlust" if p20_loss else "Jahresgewinn"
     flow.append(_pot_table(
         styles, "§ 20 EStG · Anlage KAP", "Termingeschäfte",
-        f"{p20['count']} Buchungen"
-        + (f" · Verlustvortrag {_money(p20['lossCarryIn'])}" if p20["lossCarryIn"] else ""),
-        p20["resultAfterCarry"], "Sparerpauschbetrag beachten", True, "par20"))
+        f"{p20['count']} Buchungen",
+        p20["result"], p20_status, True, "par20"))
+
+    # Verlustvortrag/Sparerpauschbetrag mindern nur, was in der
+    # Steuererklärung als Ertrag landet - das tatsächliche Jahresergebnis
+    # oben bleibt davon unberührt. Hier nur als Zusatzinfo mit Balken, damit
+    # nachvollziehbar ist, wie sich der steuerpflichtige Betrag ergibt.
+    if p20["lossCarryIn"] or (not p20_loss and p20["result"] > 0):
+        carry_used = min(p20["lossCarryIn"], p20["result"]) if not p20_loss else Decimal(0)
+        carry_remaining = p20["lossCarryIn"] - carry_used
+        indent = ParagraphStyle("indent20", parent=styles["potmeta"], leftIndent=13)
+        if p20["lossCarryIn"]:
+            flow.append(Spacer(1, 4))
+            flow.append(Paragraph(
+                f"Verlustvortrag: {_money(carry_used)} von {_money(p20['lossCarryIn'])} "
+                f"verrechnet" + (f" · {_money(carry_remaining)} übrig" if carry_remaining else ""),
+                indent))
+            flow.append(Spacer(1, 2))
+            pct_carry = float(carry_used / p20["lossCarryIn"] * 100) if p20["lossCarryIn"] else 0
+            flow.append(Table([[_bar(pct_carry, COL["par20"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
+        if not p20_loss and p20["result"] > 0:
+            after_carry = max(p20["result"] - carry_used, Decimal(0))
+            pausch_used = min(after_carry, p20["sparerpauschbetrag"])
+            flow.append(Spacer(1, 6))
+            flow.append(Paragraph(
+                f"Sparerpauschbetrag: {_money(pausch_used)} von {_money(p20['sparerpauschbetrag'])} "
+                f"genutzt · steuerpflichtig lt. Steuererklärung: {_money(p20['taxable'])}",
+                indent))
+            flow.append(Spacer(1, 2))
+            pct_pausch = float(pausch_used / p20["sparerpauschbetrag"] * 100) \
+                        if p20["sparerpauschbetrag"] else 0
+            flow.append(Table([[_bar(pct_pausch, COL["par20"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
     flow.append(Spacer(1, 8))
     flow.append(_pot_table(
         styles, "§ 22 Nr. 3 EStG", "Sonstige Einkünfte",
@@ -231,12 +296,62 @@ def _flat_rows(rows):
     return out
 
 
+def _native_str(native):
+    parts = []
+    for n in native:
+        parts.append(f"{n['amount']} {n['asset']}" + (" (Gebühr)" if n["kind"] == "fee" else ""))
+    return " · ".join(parts)
+
+
+def _all_rows(rows, tx_labels):
+    out = []
+    for r in rows:
+        desc = tx_labels.get(r["txType"], r["txType"])
+        sub = (r["note"] + " · " if r["note"] else "") + _native_str(r["native"])
+        out.append((_day(r["date"]), desc, sub, _money(r["eur"])))
+    return out
+
+
+class _NumberedCanvas(Canvas):
+    """Sammelt alle Seiten, bevor sie geschrieben werden - erst dann steht
+    die Gesamtseitenzahl fest ('Seite X von Y' statt nur 'Seite X')."""
+
+    def __init__(self, *args, footer_text="", **kwargs):
+        Canvas.__init__(self, *args, **kwargs)
+        self._saved_states = []
+        self._footer_text = footer_text
+
+    def showPage(self):
+        self._saved_states.append(dict(self.__dict__))
+        self._startPage()
+
+    def save(self):
+        total = len(self._saved_states)
+        for state in self._saved_states:
+            self.__dict__.update(state)
+            self._draw_footer(total)
+            Canvas.showPage(self)
+        Canvas.save(self)
+
+    def _draw_footer(self, total):
+        page = self._pageNumber
+        w, _h = A4
+        self.setFont("Helvetica", 7.5)
+        self.setFillColor(DIM)
+        self.drawString(18 * mm, 10 * mm, self._footer_text)
+        self.drawRightString(w - 18 * mm, 10 * mm, f"Seite {page} von {total}")
+        self.setStrokeColor(LINE)
+        self.setLineWidth(0.5)
+        self.line(18 * mm, 13.5 * mm, w - 18 * mm, 13.5 * mm)
+
+
 def build_pdf(report, year, meta_text) -> bytes:
     styles = _styles()
     buf = BytesIO()
+    footer_text = f"Krypto-Tracker · Steuerreport {year} · erstellt {report['generatedAt'][:16].replace('T',' ')}"
     doc = SimpleDocTemplate(buf, pagesize=A4,
                             leftMargin=18 * mm, rightMargin=18 * mm,
-                            topMargin=18 * mm, bottomMargin=16 * mm,
+                            topMargin=18 * mm, bottomMargin=22 * mm,
                             title=f"Steuerreport {year}")
 
     flow = _cover(report, year, meta_text, styles)
@@ -264,5 +379,27 @@ def build_pdf(report, year, meta_text) -> bytes:
             flow.append(Paragraph("Keine Buchungen in diesem Jahr.", styles["note"]))
         flow.append(Spacer(1, 14))
 
-    doc.build(flow)
+    # --- Anhang: wirklich jede Buchung, nach Steuertopf, auch neutrale -----
+    flow.append(PageBreak())
+    flow.append(Paragraph(f"Anhang — alle Buchungen {year}, nach Steuertopf", styles["h2"]))
+    flow.append(Paragraph(
+        "Vollständige Liste, unabhängig davon, ob eine Buchung steuerlich relevant "
+        "ist - zur Nachvollziehbarkeit jeder einzelnen Zahl oben.", styles["note"]))
+    flow.append(Spacer(1, 8))
+
+    all_by_bucket = y.get("allByBucket", {})
+    for bucket in TAX.ALL_BUCKETS:
+        rows = all_by_bucket.get(bucket, [])
+        flow.append(_group_header(styles, bucket, TAX.BUCKET_LABELS[bucket], len(rows)))
+        if rows:
+            flow.append(_rows_table(styles, _all_rows(rows, TAX.TX_TYPE_LABELS)))
+        else:
+            flow.append(Spacer(1, 4))
+            flow.append(Paragraph("Keine Buchungen in diesem Jahr.", styles["note"]))
+        flow.append(Spacer(1, 14))
+
+    def _canvasmaker(*args, **kwargs):
+        return _NumberedCanvas(*args, footer_text=footer_text, **kwargs)
+
+    doc.build(flow, canvasmaker=_canvasmaker)
     return buf.getvalue()
