@@ -533,6 +533,19 @@ function dash(){
   const pos = (STATE.positions||[])[0];
   const mk = (MARKET||[])[0];
   const upnl = mk && mk.unrealizedPnl != null ? N(mk.unrealizedPnl) : null;
+  // Native unrealisierte PnL über ALLE offenen Positionen aufsummieren,
+  // gruppiert nach Margin-Waehrung - vorher wurde hier nur Position[0]
+  // gezeigt, was bei mehr als einer offenen Position nicht zur (korrekt
+  // aufsummierten) Euro-Hauptzahl passte.
+  const upnlByCcy = {};
+  (STATE.positions||[]).forEach((p,i) => {
+    const m = (MARKET||[])[i];
+    if(!m || m.unrealizedPnl == null) return;
+    const ccy = p.settle_ccy || "USDC";
+    upnlByCcy[ccy] = (upnlByCcy[ccy]||0) + N(m.unrealizedPnl);
+  });
+  const upnlNative = Object.entries(upnlByCcy)
+    .map(([ccy,v]) => `${sgn(v)} ${esc(ccy)}`).join(" · ");
 
   const hero = `<div class="hero">
     <div class="hero-l">
@@ -582,8 +595,8 @@ function dash(){
       <div class="tile-v ${(adj.unrealizedEur??upnl)>=0?"up":"down"}">${
         adj.unrealizedEur!=null ? sgn(adj.unrealizedEur)+" €"
         : upnl!=null ? sgn(upnl)+" "+esc(pos&&pos.settle_ccy||"") : "–"}</div>
-      <div class="tile-s">${upnl!=null
-        ? (adj.unrealizedEur!=null ? sgn(upnl)+" "+esc(pos&&pos.settle_ccy||"")+" · " : "")
+      <div class="tile-s">${upnlNative
+        ? (adj.unrealizedEur!=null ? upnlNative+" · " : "")
           + "bereits in Ergebnis gesamt"
         : "Kurs fehlt"}</div></div>
   </div>`;
