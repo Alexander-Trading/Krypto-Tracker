@@ -175,7 +175,11 @@ def _cover(report, year, meta_text, styles):
         "unter Freigrenze" if not p23["exceeded"] else "Freigrenze überschritten",
         not p23["exceeded"], "par23"))
     flow.append(Spacer(1, 8))
-    p20_loss = p20["result"] < 0
+    p20_result = Decimal(str(p20["result"]))
+    p20_carry_in = Decimal(str(p20["lossCarryIn"]))
+    p20_pausch = Decimal(str(p20["sparerpauschbetrag"]))
+    p20_taxable = Decimal(str(p20["taxable"]))
+    p20_loss = p20_result < 0
     p20_status = "Jahresverlust" if p20_loss else "Jahresgewinn"
     flow.append(_pot_table(
         styles, "§ 20 EStG · Anlage KAP", "Termingeschäfte",
@@ -186,34 +190,33 @@ def _cover(report, year, meta_text, styles):
     # Steuererklärung als Ertrag landet - das tatsächliche Jahresergebnis
     # oben bleibt davon unberührt. Hier nur als Zusatzinfo mit Balken, damit
     # nachvollziehbar ist, wie sich der steuerpflichtige Betrag ergibt.
-    if p20["lossCarryIn"] or (not p20_loss and p20["result"] > 0):
-        carry_used = min(p20["lossCarryIn"], p20["result"]) if not p20_loss else Decimal(0)
-        carry_remaining = p20["lossCarryIn"] - carry_used
+    if p20_carry_in or (not p20_loss and p20_result > 0):
+        carry_used = min(p20_carry_in, p20_result) if not p20_loss else Decimal(0)
+        carry_remaining = p20_carry_in - carry_used
         indent = ParagraphStyle("indent20", parent=styles["potmeta"], leftIndent=13)
-        if p20["lossCarryIn"]:
+        if p20_carry_in:
             flow.append(Spacer(1, 4))
             flow.append(Paragraph(
-                f"Verlustvortrag: {_money(carry_used)} von {_money(p20['lossCarryIn'])} "
+                f"Verlustvortrag: {_money(carry_used)} von {_money(p20_carry_in)} "
                 f"verrechnet" + (f" · {_money(carry_remaining)} übrig" if carry_remaining else ""),
                 indent))
             flow.append(Spacer(1, 2))
-            pct_carry = float(carry_used / p20["lossCarryIn"] * 100) if p20["lossCarryIn"] else 0
+            pct_carry = float(carry_used / p20_carry_in * 100) if p20_carry_in else 0
             flow.append(Table([[_bar(pct_carry, COL["par20"], width_mm=152)]],
                               colWidths=[165 * mm],
                               style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
                                                 ("TOPPADDING", (0, 0), (-1, -1), 0),
                                                 ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
-        if not p20_loss and p20["result"] > 0:
-            after_carry = max(p20["result"] - carry_used, Decimal(0))
-            pausch_used = min(after_carry, p20["sparerpauschbetrag"])
+        if not p20_loss and p20_result > 0:
+            after_carry = max(p20_result - carry_used, Decimal(0))
+            pausch_used = min(after_carry, p20_pausch)
             flow.append(Spacer(1, 6))
             flow.append(Paragraph(
-                f"Sparerpauschbetrag: {_money(pausch_used)} von {_money(p20['sparerpauschbetrag'])} "
-                f"genutzt · steuerpflichtig lt. Steuererklärung: {_money(p20['taxable'])}",
+                f"Sparerpauschbetrag: {_money(pausch_used)} von {_money(p20_pausch)} "
+                f"genutzt · steuerpflichtig lt. Steuererklärung: {_money(p20_taxable)}",
                 indent))
             flow.append(Spacer(1, 2))
-            pct_pausch = float(pausch_used / p20["sparerpauschbetrag"] * 100) \
-                        if p20["sparerpauschbetrag"] else 0
+            pct_pausch = float(pausch_used / p20_pausch * 100) if p20_pausch else 0
             flow.append(Table([[_bar(pct_pausch, COL["par20"], width_mm=152)]],
                               colWidths=[165 * mm],
                               style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
