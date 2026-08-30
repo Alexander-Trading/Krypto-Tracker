@@ -559,6 +559,14 @@ function dash(){
   const latestY = (TAXR && TAXR.years && TAXR.years.length)
     ? TAXR.years[TAXR.years.length-1] : null;
   const realized = latestY ? N(latestY.par20.result) + N(latestY.par23.gain) : null;
+  // Fuer den Abgleich mit "Ergebnis gesamt" (seit der allerersten Einzahlung)
+  // braucht es das realisierte Ergebnis über ALLE Jahre, nicht nur das
+  // aktuellste - sonst fehlt bei mehrjaehriger Historie aelteres realisiertes
+  // Ergebnis in der Differenz und wird faelschlich als Wechselkurseffekt
+  // ausgewiesen.
+  const realizedAllTime = (TAXR && TAXR.years && TAXR.years.length)
+    ? TAXR.years.reduce((a,y)=>a + N(y.par20.result) + N(y.par23.gain), 0)
+    : null;
 
   const tiles = `<div class="grid4" style="margin-top:12px">
     <div class="tile"><div class="tile-k">Eingezahlt</div>
@@ -580,20 +588,22 @@ function dash(){
         : "Kurs fehlt"}</div></div>
   </div>`;
 
-  // Ergebnis gesamt = Realisiert + Unrealisiert + Wechselkurseffekt auf den
-  // Rest des Bestands (z.B. freies USDC/USDT, das weder realisiert noch Teil
-  // der offenen Position ist, aber zum heutigen statt zum Buchungstags-Kurs
-  // bewertet wird). Ohne diese dritte Komponente gehen die Zahlen scheinbar
-  // nicht auf - ist aber kein Fehler, nur bisher unsichtbar gewesen.
-  const fxNote = (res!=null && realized!=null && adj.unrealizedEur!=null)
+  // Ergebnis gesamt = Realisiert (alle Jahre) + Unrealisiert + Wechselkurseffekt
+  // auf den Rest des Bestands (z.B. freies USDC/USDT, das weder realisiert
+  // noch Teil der offenen Position ist, aber zum heutigen statt zum
+  // Buchungstags-Kurs bewertet wird). Ohne diese dritte Komponente gehen die
+  // Zahlen scheinbar nicht auf - ist aber kein Fehler, nur bisher unsichtbar
+  // gewesen.
+  const fxNote = (res!=null && realizedAllTime!=null && adj.unrealizedEur!=null)
     ? (() => {
-        const fx = res - realized - adj.unrealizedEur;
+        const fx = res - realizedAllTime - adj.unrealizedEur;
         if(!Number.isFinite(fx) || Math.abs(fx) < 0.01) return "";
         return `<div class="tag" style="margin-top:10px;
           display:block;padding:8px 10px;font-size:11px;line-height:1.5;
-          background:var(--panel-2);color:var(--dim)">Ergebnis gesamt = Realisiert +
-          Unrealisiert ${fx>=0?"+":"−"} ${nf(Math.abs(fx))} € Wechselkurseffekt auf den
-          übrigen Bestand (z.B. freies USDC/USDT, heute statt zum Buchungstag bewertet).</div>`;
+          background:var(--panel-2);color:var(--dim)">Ergebnis gesamt = Realisiert (alle Jahre) +
+          Unrealisiert ${fx>=0?"+":"−"} ${nf(Math.abs(fx))} € Wechselkurseffekt auf dein
+          eingezahltes, nicht investiertes Geld (freies USDC/USDT auf dem Handelskonto,
+          heute statt zum Buchungstag bewertet).</div>`;
       })()
     : "";
 
