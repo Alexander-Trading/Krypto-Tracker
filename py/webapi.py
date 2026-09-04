@@ -24,7 +24,6 @@ import ledger as L
 import market as MK
 import tax as TAX
 import okx_import as IMP
-import okx_api as OKX
 
 try:
     import pdf_report as PDF
@@ -81,14 +80,6 @@ def set_state(conn, key, value):
 def get_state(conn, key):
     row = conn.execute("SELECT value FROM app_state WHERE key = ?", (key,)).fetchone()
     return json.loads(row["value"]) if row else None
-
-
-def _mask_key(api_key):
-    """Nie den vollen Key zurueck an die UI geben, nur genug zum
-    Wiedererkennen ('...ab12')."""
-    if not api_key or len(api_key) < 4:
-        return "••••"
-    return "••••" + api_key[-4:]
 
 
 def build_state(conn):
@@ -295,12 +286,6 @@ async def _route_get(path, query, conn):
     if path == "/api/state":
         return build_state(conn)
 
-    if path == "/api/okx-status":
-        creds = get_state(conn, "okx_credentials")
-        return {"connected": bool(creds and creds.get("apiKey")),
-                "apiKeyMasked": _mask_key(creds.get("apiKey")) if creds else None,
-                "region": (creds or {}).get("region", "global")}
-
     return {"__error__": "Nicht gefunden", "__status__": 404}
 
 
@@ -387,55 +372,6 @@ async def _route_post(path, body, conn):
                                    "instType": body.get("instType", "FUTURES")}
         set_state(conn, "instmap", instmap)
         return {"ok": True, "instmap": instmap}
-
-    if path == "/api/okx-save":
-        api_key = (body.get("apiKey") or "").strip()
-        api_secret = (body.get("apiSecret") or "").strip()
-        passphrase = (body.get("passphrase") or "").strip()
-        region = body.get("region") if body.get("region") in ("eea", "global", "us") else "global"
-        if not (api_key and api_secret and passphrase):
-            return {"__error__": "API-Key, Secret und Passphrase werden alle drei gebraucht."}
-        set_state(conn, "okx_credentials",
-                  {"apiKey": api_key, "apiSecret": api_secret,
-                   "passphrase": passphrase, "region": region})
-        return {"ok": True, "apiKeyMasked": _mask_key(api_key)}
-
-    if path == "/api/okx-region":
-        creds = get_state(conn, "okx_credentials")
-        if not creds:
-            return {"__error__": "Keine OKX-Zugangsdaten hinterlegt."}
-        region = body.get("region") if body.get("region") in ("eea", "global", "us") else "global"
-        creds["region"] = region
-        set_state(conn, "okx_credentials", creds)
-        return {"ok": True, "region": region}
-
-    if path == "/api/okx-clear":
-        conn.execute("DELETE FROM app_state WHERE key = 'okx_credentials'")
-        conn.commit()
-        return {"ok": True}
-
-    if path == "/api/okx-test":
-        creds = get_state(conn, "okx_credentials")
-        try:
-            info = await OKX.test_connection(creds)
-        except OKX.OkxAuthError as exc:
-            return {"__error__": str(exc), "errorKind": "auth"}
-        except OKX.OkxApiError as exc:
-            return {"__error__": str(exc), "errorKind": "network"}
-        return {"ok": True, "account": info}
-
-    if path == "/api/okx-positions":
-        creds = get_state(conn, "okx_credentials")
-        try:
-            live = await OKX.positions(creds)
-            live_balance = await OKX.balance(creds)
-        except OKX.OkxAuthError as exc:
-            return {"__error__": str(exc), "errorKind": "auth"}
-        except OKX.OkxApiError as exc:
-            return {"__error__": str(exc), "errorKind": "network"}
-        set_state(conn, "positions", live)
-        return {"ok": True, "positions": live, "balance": live_balance,
-                "state": build_state(conn)}
 
     return {"__error__": "Nicht gefunden", "__status__": 404}
 
