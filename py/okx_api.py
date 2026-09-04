@@ -127,12 +127,19 @@ async def _request(creds, method, path, params=None, body=None):
 
 
 async def _request_pyodide(url, method, headers, body_str):
+    import asyncio
     import pyodide.http
     try:
         kwargs = {"method": method, "headers": headers}
         if body_str:
             kwargs["body"] = body_str
-        resp = await pyodide.http.pyfetch(url, **kwargs)
+        resp = await asyncio.wait_for(pyodide.http.pyfetch(url, **kwargs), timeout=TIMEOUT)
+    except asyncio.TimeoutError:
+        raise OkxApiError(
+            f"Keine Antwort von {url} nach {TIMEOUT}s. Möglich, dass die "
+            "Anfrage lautlos verworfen wird (z.B. CORS-Preflight ohne "
+            "Antwort) - probier probeweise die andere Region (EU/EWR ↔ "
+            "Global) unter Import > OKX-Verbindung.") from None
     except Exception as exc:
         raise OkxApiError(
             f"Keine Verbindung zu OKX aus dem Browser heraus: {exc}. Möglich, "
