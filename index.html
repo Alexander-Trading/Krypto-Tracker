@@ -960,9 +960,15 @@ function taxPanel(){
     return {usedCarry, remainingCarry, headline};
   }
 
-  const c23 = carryCalc(g23, c23in, true);
+  // Alle drei Toepfe gleich: die Kachel zeigt das TATSAECHLICHE Jahres-
+  // ergebnis. Freigrenze (§23/§22) bzw. Sparerpauschbetrag (§20) sind eine
+  // Frage der Steuerpflicht, nicht des Ergebnisses - sie stehen als
+  // Zusatzhinweis darunter. Vorher wurde bei §23/§22 ein echter Verlust
+  // auf 0 hochgezogen (floorAlways), wodurch z.B. -0,06 € aus lauter
+  // kleinen USDC-Abgaengen faelschlich als "0,00 €" erschien.
+  const c23 = carryCalc(g23, c23in, false);
   const c20 = carryCalc(r20, c20in, false);
-  const c22 = carryCalc(r22, c22in, true);
+  const c22 = carryCalc(r22, c22in, false);
 
   const breakdown = (label, gross, calc, yr) => calc.usedCarry > 0 ? `<div class="tx-breakdown">
       <div class="tbd-row"><span>${label} ${yr}</span><span>${eur(gross)}</span></div>
@@ -980,7 +986,7 @@ function taxPanel(){
     ${c23.usedCarry>0?`<div class="tx-hint" style="margin-top:-8px">${
       c23.headline<=0?`steuerpflichtig für ${YEAR}: 0 €`:"verbleibender steuerpflichtiger Gewinn"}</div>`:""}
     <div class="fg-bar ${c23.headline>fg23?"over":""}"><i style="width:${
-      Math.min(100,Math.abs(c23.headline)/fg23*100)}%"></i></div>
+      Math.max(0,Math.min(100,c23.headline/fg23*100))}%"></i></div>
     <div class="tx-hint">${c23.headline>fg23
       ? `Freigrenze von ${eur(fg23)} überschritten – der <b>gesamte</b> Betrag ist steuerpflichtig.`
       : c23.headline <= 0
@@ -1060,7 +1066,7 @@ function taxPanel(){
     ${c22.usedCarry>0?`<div class="tx-hint" style="margin-top:-8px">${
       c22.headline<=0?`steuerpflichtig für ${YEAR}: 0 €`:"verbleibendes steuerpflichtiges Ergebnis"}</div>`:""}
     <div class="fg-bar ${c22.headline>fg22?"over":""}"><i style="width:${
-      Math.min(100,Math.abs(c22.headline)/fg22*100)}%"></i></div>
+      Math.max(0,Math.min(100,c22.headline/fg22*100))}%"></i></div>
     <div class="tx-hint">${c22.headline>fg22
       ? `Freigrenze von ${eur(fg22)} überschritten.`
       : c22.headline <= 0
