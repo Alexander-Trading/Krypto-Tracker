@@ -1277,8 +1277,10 @@ function okxPanel(){
       ${connected
         ? `<div class="kv"><span>Status</span><span><b style="color:var(--ok,#1F9D74)">
              verbunden</b> · Key ${esc(OKX_STATUS.apiKeyMasked||"")}</span></div>
+           <div class="kv"><span>Region</span><span>${OKX_STATUS.region==="eea"?"EU/EWR (my.okx.com)":"Global (www.okx.com)"}</span></div>
            <div class="actions" style="border:none;padding:12px 0 0;margin:0;gap:8px">
              <button class="act" id="btnOkxTest">Verbindung testen</button>
+             <button class="act" id="btnOkxRegion">Region wechseln</button>
              <button class="act" id="btnOkxPositions">Positionen jetzt abrufen</button>
              <button class="act" id="btnOkxClear" style="margin-left:auto;color:var(--danger,#C0392B)">Trennen</button>
            </div>`
@@ -1290,6 +1292,16 @@ function okxPanel(){
              <label>API-Key<input type="text" id="okxKey" autocomplete="off"></label>
              <label style="margin-top:8px">Secret Key<input type="password" id="okxSecret" autocomplete="off"></label>
              <label style="margin-top:8px">Passphrase<input type="password" id="okxPass" autocomplete="off"></label>
+             <label style="margin-top:8px">Region
+               <select id="okxRegion">
+                 <option value="eea" selected>EU/EWR (my.okx.com)</option>
+                 <option value="global">Global (www.okx.com)</option>
+               </select>
+             </label>
+             <div class="note-s" style="padding:6px 0 0">OKX bedient EU/EWR-Nutzer seit 2024
+               über eine eigene Infrastruktur - ein dort erstellter Key funktioniert nur mit
+               der passenden Region. Falls der Test mit "API key doesn't exist" fehlschlägt,
+               hier einfach umschalten.</div>
              <div class="txform-actions">
                <button class="act primary" id="btnOkxSave">Speichern & testen</button>
              </div>
@@ -1311,12 +1323,12 @@ function okxMsg(html, isError){
 function wireOkx(){
   if($("#btnOkxSave")) $("#btnOkxSave").onclick = async ()=>{
     const apiKey=$("#okxKey").value.trim(), apiSecret=$("#okxSecret").value.trim(),
-          passphrase=$("#okxPass").value.trim();
+          passphrase=$("#okxPass").value.trim(), region=$("#okxRegion").value;
     if(!apiKey||!apiSecret||!passphrase){
       okxMsg("Bitte alle drei Felder ausfüllen.", true); return; }
     $("#btnOkxSave").textContent="Speichere …"; $("#btnOkxSave").disabled=true;
     try{
-      await api("/api/okx-save",{apiKey,apiSecret,passphrase});
+      await api("/api/okx-save",{apiKey,apiSecret,passphrase,region});
       okxMsg("Gespeichert. Teste Verbindung …");
       const r = await api("/api/okx-test",{});
       okxMsg(`Verbindung erfolgreich (UID ${esc(r.account.uid||"")}).`);
@@ -1332,6 +1344,21 @@ function wireOkx(){
       const r = await api("/api/okx-test",{});
       okxMsg(`Verbindung erfolgreich (UID ${esc(r.account.uid||"")}).`);
     }catch(e){ okxMsg(esc(e.message||e), true); }
+  };
+  if($("#btnOkxRegion")) $("#btnOkxRegion").onclick = async ()=>{
+    const next = OKX_STATUS.region==="eea" ? "global" : "eea";
+    okxMsg("Wechsle Region …");
+    try{
+      await api("/api/okx-region",{region:next});
+      await refreshOkxStatus();
+      okxMsg("Region umgestellt. Teste …");
+      const r = await api("/api/okx-test",{});
+      okxMsg(`Verbindung erfolgreich (UID ${esc(r.account.uid||"")}).`);
+      $("#panel").innerHTML = importPanel(); wireDrop(); wireOkx();
+    }catch(e){
+      $("#panel").innerHTML = importPanel(); wireDrop(); wireOkx();
+      okxMsg(esc(e.message||e), true);
+    }
   };
   if($("#btnOkxPositions")) $("#btnOkxPositions").onclick = async ()=>{
     okxMsg("Rufe Positionen ab …");
