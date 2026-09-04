@@ -1712,7 +1712,11 @@ window.pyReady = (async () => {
     const files = ["ledger.py", "tax.py", "okx_import.py", "okx_api.py", "market.py",
                     "webapi.py", "pdf_report.py", "schema.sql"];
     for (const f of files) {
-      const resp = await fetch("py/" + f);
+      // cache:"no-store" erzwingt jedes Mal einen frischen Abruf - sonst
+      // liefert Safari nach einem Update auf GitHub gerne noch die alte,
+      // im Cache liegende Version der .py-Dateien aus, ohne dass man das
+      // am Fehlerbild erkennen könnte.
+      const resp = await fetch("py/" + f, {cache: "no-store"});
       if (!resp.ok) {
         throw new Error(
           `Datei "py/${f}" konnte nicht geladen werden (HTTP ${resp.status}). `+
