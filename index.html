@@ -1277,7 +1277,7 @@ function okxPanel(){
       ${connected
         ? `<div class="kv"><span>Status</span><span><b style="color:var(--ok,#1F9D74)">
              verbunden</b> · Key ${esc(OKX_STATUS.apiKeyMasked||"")}</span></div>
-           <div class="kv"><span>Region</span><span>${OKX_STATUS.region==="eea"?"EU/EWR (my.okx.com)":"Global (www.okx.com)"}</span></div>
+           <div class="kv"><span>Region</span><span>${{eea:"EU/EWR (eea.okx.com)",us:"USA (us.okx.com)",global:"Global (www.okx.com)"}[OKX_STATUS.region]||OKX_STATUS.region}</span></div>
            <div class="actions" style="border:none;padding:12px 0 0;margin:0;gap:8px">
              <button class="act" id="btnOkxTest">Verbindung testen</button>
              <button class="act" id="btnOkxRegion">Region wechseln</button>
@@ -1297,14 +1297,13 @@ function okxPanel(){
                autocapitalize="off" autocorrect="off" spellcheck="false"></label>
              <label style="margin-top:8px">Region
                <select id="okxRegion">
-                 <option value="eea" selected>EU/EWR (my.okx.com)</option>
-                 <option value="global">Global (www.okx.com)</option>
+                 <option value="global" selected>Global (www.okx.com)</option>
+                 <option value="eea">EU/EWR (eea.okx.com)</option>
+                 <option value="us">USA (us.okx.com)</option>
                </select>
              </label>
-             <div class="note-s" style="padding:6px 0 0">OKX bedient EU/EWR-Nutzer seit 2024
-               über eine eigene Infrastruktur - ein dort erstellter Key funktioniert nur mit
-               der passenden Region. Falls der Test mit "API key doesn't exist" fehlschlägt,
-               hier einfach umschalten.</div>
+             <div class="note-s" style="padding:6px 0 0">Falls der Test mit "API key doesn't
+               exist" fehlschlägt, hier auf EU/EWR umstellen und erneut versuchen.</div>
              <div class="txform-actions">
                <button class="act primary" id="btnOkxSave">Speichern & testen</button>
              </div>
