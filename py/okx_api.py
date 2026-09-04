@@ -35,7 +35,8 @@ import sys
 from datetime import datetime, timezone
 from decimal import Decimal
 
-BASE = "https://www.okx.com"
+BASE_GLOBAL = "https://www.okx.com"
+BASE_EEA = "https://my.okx.com"
 TIMEOUT = 12
 IN_PYODIDE = sys.platform == "emscripten"
 
@@ -66,6 +67,16 @@ def _sign(secret, timestamp, method, request_path, body=""):
     return base64.b64encode(mac.digest()).decode()
 
 
+def _base_url(creds):
+    """OKX bedient Nutzer aus der EU/dem EWR seit 2024 ueber eine eigene
+    Infrastruktur (my.okx.com statt www.okx.com) - Grund sind regulatorische
+    Vorgaben (MiCA). Ein dort erstellter API-Key funktioniert AUSSCHLIESSLICH
+    gegen my.okx.com; gegen www.okx.com verwendet, meldet OKX faelschlich
+    'API key doesn't exist' (Code 50119), obwohl der Key eigentlich gueltig
+    ist. Deshalb ist das hier vom Nutzer waehlbar statt fest einprogrammiert."""
+    return BASE_EEA if (creds or {}).get("region") == "eea" else BASE_GLOBAL
+
+
 async def _request(creds, method, path, params=None, body=None):
     """creds: dict mit apiKey/apiSecret/passphrase (aus app_state gelesen).
     Signiert und schickt eine private Anfrage, liefert das 'data'-Feld der
@@ -94,7 +105,7 @@ async def _request(creds, method, path, params=None, body=None):
         "OK-ACCESS-PASSPHRASE": creds["passphrase"],
         "Content-Type": "application/json",
     }
-    url = BASE + request_path
+    url = _base_url(creds) + request_path
 
     if IN_PYODIDE:
         payload = await _request_pyodide(url, method, headers, body_str)
@@ -102,6 +113,12 @@ async def _request(creds, method, path, params=None, body=None):
         payload = _request_urllib(url, method, headers, body_str)
 
     code = str(payload.get("code"))
+    if code == "50119":
+        raise OkxAuthError(
+            "OKX meldet 'API key doesn't exist' (Code 50119). Das kommt sehr "
+            "häufig vor, wenn der Key auf der jeweils anderen Region erstellt "
+            "wurde - unter Import > OKX-Verbindung einmal die Region "
+            "umschalten (EU/EWR ↔ Global) und erneut testen.")
     if code == "50111" or code == "50113" or code == "50114":
         raise OkxAuthError(f"OKX lehnt die Zugangsdaten ab: {payload.get('msg')}")
     if code != "0":
@@ -133,6 +150,12 @@ async def _request_pyodide(url, method, headers, body_str):
         pass
 
     if not resp.ok:
+        if okx_body and str(okx_body.get("code")) == "50119":
+            raise OkxAuthError(
+                "OKX meldet 'API key doesn't exist' (Code 50119). Das kommt "
+                "sehr häufig vor, wenn der Key auf der jeweils anderen Region "
+                "erstellt wurde - unter Import > OKX-Verbindung einmal die "
+                "Region umschalten (EU/EWR ↔ Global) und erneut testen.")
         if okx_body and okx_body.get("msg"):
             raise OkxAuthError(
                 f"OKX lehnt die Anfrage ab (HTTP {resp.status}): "
