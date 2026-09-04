@@ -56,8 +56,8 @@ def D(v):
 
 
 def _timestamp():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.") + \
-        f"{datetime.now(timezone.utc).microsecond // 1000:03d}Z"
+    now = datetime.now(timezone.utc)
+    return now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond // 1000:03d}Z"
 
 
 def _sign(secret, timestamp, method, request_path, body=""):
@@ -122,14 +122,26 @@ async def _request_pyodide(url, method, headers, body_str):
             "dass OKX signierte Anfragen direkt aus dem Browser nicht "
             "zulässt (CORS) - dann bräuchte es einen Server-Umweg, und die "
             "direkte API-Anbindung wäre so nicht nutzbar.") from None
-    if resp.status == 401:
-        raise OkxAuthError("OKX lehnt die Zugangsdaten ab (HTTP 401).")
-    if not resp.ok:
-        raise OkxApiError(f"HTTP {resp.status} bei {url}")
+
+    # Auch bei einem Fehler-Status (401 etc.) schickt OKX meist einen JSON-Body
+    # mit einem aussagekraeftigen 'msg'/'code' - den wollen wir sehen statt nur
+    # "HTTP 401", sonst ist das Fehlersuchen ein Ratespiel.
+    okx_body = None
     try:
-        return await resp.json()
-    except Exception as exc:
-        raise OkxApiError(f"Antwort von OKX nicht lesbar: {exc}") from None
+        okx_body = await resp.json()
+    except Exception:
+        pass
+
+    if not resp.ok:
+        if okx_body and okx_body.get("msg"):
+            raise OkxAuthError(
+                f"OKX lehnt die Anfrage ab (HTTP {resp.status}): "
+                f"{okx_body['msg']} (Code {okx_body.get('code')})")
+        raise OkxApiError(f"HTTP {resp.status} bei {url}")
+
+    if okx_body is None:
+        raise OkxApiError("Antwort von OKX nicht als JSON lesbar.")
+    return okx_body
 
 
 def _request_urllib(url, method, headers, body_str):
