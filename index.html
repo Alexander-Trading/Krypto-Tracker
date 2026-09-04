@@ -1709,7 +1709,7 @@ window.pyReady = (async () => {
     await new Promise((res, rej) =>
       pyodide.FS.syncfs(true, err => err ? rej(err) : res()));
 
-    const files = ["ledger.py", "tax.py", "okx_import.py", "market.py",
+    const files = ["ledger.py", "tax.py", "okx_import.py", "okx_api.py", "market.py",
                     "webapi.py", "pdf_report.py", "schema.sql"];
     for (const f of files) {
       const resp = await fetch("py/" + f);
