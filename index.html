@@ -1251,13 +1251,103 @@ function importPanel(){
       <div class="what"><div class="title">${esc(r.filename)}</div>
       <div class="note-s">${esc(KIND[n.kind]||n.kind||"")} · Zeitzone ${esc(n.tz||"?")}</div></div>
       <div class="amt"><i>${r.rows_imported} / ${r.rows_read}</i></div></div>`;}).join("");
-  return `<div class="drop" id="drop" tabindex="0" role="button">
+  return `${okxPanel()}
+    <div class="sect">CSV-Import</div>
+    <div class="drop" id="drop" tabindex="0" role="button">
       <div class="drop-t">CSV hierher ziehen</div>
       <div class="drop-h">Funding History und Trading History aus dem OKX Order Center.
         Dieselbe Datei zweimal einzulesen ändert nichts.</div></div>
     <input type="file" id="file" accept=".csv,.txt,text/csv" class="hidden">
     <div id="impResult"></div>
     ${runs?`<div class="sect">Bisherige Importe</div><div class="card">${runs}</div>`:""}`;
+}
+
+/* ---- OKX-API-Verbindung ----
+   Zugangsdaten liegen lokal in IndexedDB (app_state-Tabelle), verlassen das
+   Geraet nur als Teil der signierten, direkt an OKX gerichteten Anfrage -
+   nie an GitHub, nie an einen dritten Server. Ob OKX signierte Anfragen aus
+   dem Browser ueberhaupt zulaesst (CORS), ist unverifiziert - "Verbindung
+   testen" ist deshalb bewusst ein eigener, harmloser erster Schritt. */
+let OKX_STATUS=null;
+
+function okxPanel(){
+  const connected = OKX_STATUS && OKX_STATUS.connected;
+  return `<div class="sect">OKX-Verbindung (API)</div>
+    <div class="card" style="padding:16px 20px">
+      ${connected
+        ? `<div class="kv"><span>Status</span><span><b style="color:var(--ok,#1F9D74)">
+             verbunden</b> · Key ${esc(OKX_STATUS.apiKeyMasked||"")}</span></div>
+           <div class="actions" style="border:none;padding:12px 0 0;margin:0;gap:8px">
+             <button class="act" id="btnOkxTest">Verbindung testen</button>
+             <button class="act" id="btnOkxPositions">Positionen jetzt abrufen</button>
+             <button class="act" id="btnOkxClear" style="margin-left:auto;color:var(--danger,#C0392B)">Trennen</button>
+           </div>`
+        : `<div class="note-s" style="margin-bottom:10px">Nur ein API-Key mit
+             <b>Lese-Rechten</b> eintragen (kein Trade, kein Withdraw) - so
+             bleibt der Schaden im Ernstfall auf reines Einsehen begrenzt.
+             Zugangsdaten bleiben lokal auf diesem Gerät.</div>
+           <div class="txform" style="padding:0">
+             <label>API-Key<input type="text" id="okxKey" autocomplete="off"></label>
+             <label style="margin-top:8px">Secret Key<input type="password" id="okxSecret" autocomplete="off"></label>
+             <label style="margin-top:8px">Passphrase<input type="password" id="okxPass" autocomplete="off"></label>
+             <div class="txform-actions">
+               <button class="act primary" id="btnOkxSave">Speichern & testen</button>
+             </div>
+           </div>`}
+      <div id="okxMsg" style="margin-top:10px"></div>
+    </div>`;
+}
+
+async function refreshOkxStatus(){
+  try{ OKX_STATUS = await api("/api/okx-status"); }
+  catch(e){ OKX_STATUS = {connected:false}; }
+}
+
+function okxMsg(html, isError){
+  const el=$("#okxMsg");
+  if(el) el.innerHTML = `<div class="${isError?"warn":"note"}">${html}</div>`;
+}
+
+function wireOkx(){
+  if($("#btnOkxSave")) $("#btnOkxSave").onclick = async ()=>{
+    const apiKey=$("#okxKey").value.trim(), apiSecret=$("#okxSecret").value.trim(),
+          passphrase=$("#okxPass").value.trim();
+    if(!apiKey||!apiSecret||!passphrase){
+      okxMsg("Bitte alle drei Felder ausfüllen.", true); return; }
+    $("#btnOkxSave").textContent="Speichere …"; $("#btnOkxSave").disabled=true;
+    try{
+      await api("/api/okx-save",{apiKey,apiSecret,passphrase});
+      okxMsg("Gespeichert. Teste Verbindung …");
+      const r = await api("/api/okx-test",{});
+      okxMsg(`Verbindung erfolgreich (UID ${esc(r.account.uid||"")}).`);
+      await refreshOkxStatus();
+      $("#panel").innerHTML = importPanel(); wireDrop(); wireOkx();
+    }catch(e){
+      okxMsg(`Gespeichert, aber der Verbindungstest ist fehlgeschlagen: ${esc(e.message||e)}`, true);
+    }
+  };
+  if($("#btnOkxTest")) $("#btnOkxTest").onclick = async ()=>{
+    okxMsg("Teste …");
+    try{
+      const r = await api("/api/okx-test",{});
+      okxMsg(`Verbindung erfolgreich (UID ${esc(r.account.uid||"")}).`);
+    }catch(e){ okxMsg(esc(e.message||e), true); }
+  };
+  if($("#btnOkxPositions")) $("#btnOkxPositions").onclick = async ()=>{
+    okxMsg("Rufe Positionen ab …");
+    try{
+      const r = await api("/api/okx-positions",{});
+      STATE = r.state;
+      okxMsg(`${r.positions.length} offene Position(en) übernommen.`);
+      if(r.positions.length) await refreshMarket();
+    }catch(e){ okxMsg(esc(e.message||e), true); }
+  };
+  if($("#btnOkxClear")) $("#btnOkxClear").onclick = async ()=>{
+    if(!confirm("OKX-Zugangsdaten von diesem Gerät entfernen?")) return;
+    await api("/api/okx-clear",{});
+    await refreshOkxStatus();
+    $("#panel").innerHTML = importPanel(); wireDrop(); wireOkx();
+  };
 }
 
 function showImport(r,name){
@@ -1307,7 +1397,8 @@ function render(){
   else if(TAB==="tx"){ p.innerHTML=txPanel(); wireTx(); loadTx(false); }
   else if(TAB==="review"){ p.innerHTML=reviewPanel(); loadReview(); }
   else if(TAB==="tax"){ p.innerHTML=taxPanel(); wireTax(); }
-  else if(TAB==="import"){ p.innerHTML=importPanel(); wireDrop(); }
+  else if(TAB==="import"){ p.innerHTML=importPanel(); wireDrop(); wireOkx();
+    refreshOkxStatus().then(()=>{ if(TAB==="import"){ p.innerHTML=importPanel(); wireDrop(); wireOkx(); } }); }
   managePosAutoRefresh();
 }
 
