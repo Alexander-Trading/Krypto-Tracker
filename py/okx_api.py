@@ -36,7 +36,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 
 BASE_GLOBAL = "https://www.okx.com"
-BASE_EEA = "https://my.okx.com"
+BASE_EEA = "https://eea.okx.com"
+BASE_US = "https://us.okx.com"
 TIMEOUT = 12
 IN_PYODIDE = sys.platform == "emscripten"
 
@@ -68,13 +69,16 @@ def _sign(secret, timestamp, method, request_path, body=""):
 
 
 def _base_url(creds):
-    """OKX bedient Nutzer aus der EU/dem EWR seit 2024 ueber eine eigene
-    Infrastruktur (my.okx.com statt www.okx.com) - Grund sind regulatorische
-    Vorgaben (MiCA). Ein dort erstellter API-Key funktioniert AUSSCHLIESSLICH
-    gegen my.okx.com; gegen www.okx.com verwendet, meldet OKX faelschlich
-    'API key doesn't exist' (Code 50119), obwohl der Key eigentlich gueltig
-    ist. Deshalb ist das hier vom Nutzer waehlbar statt fest einprogrammiert."""
-    return BASE_EEA if (creds or {}).get("region") == "eea" else BASE_GLOBAL
+    """OKX bedient Nutzer aus der EU/dem EWR (und den USA) seit 2024 ueber
+    eigene Infrastruktur - Grund sind regulatorische Vorgaben (MiCA). Wichtig:
+    das ist NICHT dieselbe Adresse wie das Web-Login (my.okx.com fuer EWR,
+    app.okx.com fuer US) - die eigentliche REST-API liegt unter eea.okx.com
+    bzw. us.okx.com. Ein dort erstellter API-Key funktioniert AUSSCHLIESSLICH
+    gegen die passende API-Adresse; gegen www.okx.com verwendet, meldet OKX
+    faelschlich 'API key doesn't exist' (Code 50119), obwohl der Key
+    eigentlich gueltig ist."""
+    region = (creds or {}).get("region", "global")
+    return {"eea": BASE_EEA, "us": BASE_US}.get(region, BASE_GLOBAL)
 
 
 async def _request(creds, method, path, params=None, body=None):

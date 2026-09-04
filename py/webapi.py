@@ -299,7 +299,7 @@ async def _route_get(path, query, conn):
         creds = get_state(conn, "okx_credentials")
         return {"connected": bool(creds and creds.get("apiKey")),
                 "apiKeyMasked": _mask_key(creds.get("apiKey")) if creds else None,
-                "region": (creds or {}).get("region", "eea")}
+                "region": (creds or {}).get("region", "global")}
 
     return {"__error__": "Nicht gefunden", "__status__": 404}
 
@@ -392,7 +392,7 @@ async def _route_post(path, body, conn):
         api_key = (body.get("apiKey") or "").strip()
         api_secret = (body.get("apiSecret") or "").strip()
         passphrase = (body.get("passphrase") or "").strip()
-        region = body.get("region") if body.get("region") in ("eea", "global") else "eea"
+        region = body.get("region") if body.get("region") in ("eea", "global", "us") else "global"
         if not (api_key and api_secret and passphrase):
             return {"__error__": "API-Key, Secret und Passphrase werden alle drei gebraucht."}
         set_state(conn, "okx_credentials",
@@ -404,7 +404,7 @@ async def _route_post(path, body, conn):
         creds = get_state(conn, "okx_credentials")
         if not creds:
             return {"__error__": "Keine OKX-Zugangsdaten hinterlegt."}
-        region = body.get("region") if body.get("region") in ("eea", "global") else "eea"
+        region = body.get("region") if body.get("region") in ("eea", "global", "us") else "global"
         creds["region"] = region
         set_state(conn, "okx_credentials", creds)
         return {"ok": True, "region": region}
