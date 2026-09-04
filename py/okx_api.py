@@ -199,10 +199,47 @@ def _request_urllib(url, method, headers, body_str):
 
 # --- Endpunkte ---------------------------------------------------------
 
+async def _public_ping(base_url):
+    """Unsignierte Anfrage ohne Sonder-Header - loest KEINEN CORS-Preflight
+    aus (nur GET, keine Custom-Header). Klappt das, aber die signierte
+    Anfrage (mit OK-ACCESS-*-Headern, die einen Preflight erzwingen) haengt
+    trotzdem, ist das ein sehr starkes Indiz: der Server antwortet auf die
+    unsichtbare OPTIONS-Vorab-Anfrage des Browsers nicht, nicht dass die
+    Adresse grundsaetzlich unerreichbar waere."""
+    import asyncio
+    url = base_url + "/api/v5/public/time"
+    try:
+        if IN_PYODIDE:
+            import pyodide.http
+            resp = await asyncio.wait_for(pyodide.http.pyfetch(url), timeout=TIMEOUT)
+            return {"ok": resp.ok, "status": resp.status}
+        else:
+            import urllib.request
+            with urllib.request.urlopen(url, timeout=TIMEOUT) as resp:
+                return {"ok": True, "status": resp.status}
+    except asyncio.TimeoutError:
+        return {"ok": False, "status": None, "timeout": True}
+    except Exception as exc:
+        return {"ok": False, "status": None, "error": str(exc)}
+
+
 async def test_connection(creds):
     """Kleinstmoeglicher authentifizierter Aufruf, nur um zu pruefen: sind
     die Zugangsdaten gueltig, und laesst der Browser die Anfrage ueberhaupt
-    durch (CORS)? Gibt bei Erfolg ein paar harmlose Kontoeckdaten zurueck."""
+    durch (CORS)? Gibt bei Erfolg ein paar harmlose Kontoeckdaten zurueck.
+    Testet vorab eine oeffentliche, unsignierte Anfrage (kein Preflight) -
+    das hilft zu unterscheiden, ob nur der Preflight fuer signierte Anfragen
+    haengt, oder die Adresse grundsaetzlich nicht erreichbar ist."""
+    base = _base_url(creds)
+    ping = await _public_ping(base)
+    if not ping.get("ok"):
+        detail = "Zeitüberschreitung" if ping.get("timeout") else ping.get("error", "unbekannter Fehler")
+        raise OkxApiError(
+            f"Schon eine einfache, unsignierte Anfrage an {base} schlägt fehl "
+            f"({detail}). Das spricht dafür, dass diese Adresse von hier aus "
+            "grundsätzlich nicht erreichbar ist - nicht speziell ein Problem "
+            "mit den Zugangsdaten oder der Signatur.")
+
     data = await _request(creds, "GET", "/api/v5/account/config")
     if not data:
         raise OkxApiError("OKX hat eine leere Antwort geschickt.")
@@ -212,6 +249,7 @@ async def test_connection(creds):
         "uid": cfg.get("uid"),
         "level": cfg.get("level"),
         "mode": cfg.get("acctLv"),
+        "publicPingOk": True,
     }
 
 
