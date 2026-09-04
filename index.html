@@ -1090,26 +1090,59 @@ function taxPanel(){
       ${carryRow("par22","§ 22 · Sonstige Einkünfte", c22in)}
     </div>`;
 
-  const lots = (TAXR.openLots||[]).map(l=>{
-    const p = Math.min(100, l.held_days/365*100);
+  // Bei vielen kleinen Zukaeufen (z.B. jede einzelne Funding-Gutschrift ein
+  // eigenes Los) waere eine Zeile pro Los unuebersichtlich - ein Eintrag pro
+  // Asset, der aelteste Teil bestimmt den Balken (der wird ja zuerst
+  // steuerfrei, FIFO-Prinzip).
+  const lotsByAsset = {};
+  (TAXR.openLots||[]).forEach(l=>{
+    (lotsByAsset[l.asset] = lotsByAsset[l.asset] || []).push(l);
+  });
+  const lots = Object.entries(lotsByAsset).map(([asset, list])=>{
+    list.sort((a,b)=> a.acquired < b.acquired ? -1 : 1);
+    const totalQty = list.reduce((s,l)=> s + N(l.qty), 0);
+    const knownCost = list.every(l=> l.cost_eur!=null);
+    const totalCost = knownCost ? list.reduce((s,l)=> s + N(l.cost_eur), 0) : null;
+    const oldest = list[0];
+    const freeCount = list.filter(l=> l.tax_free).length;
+    const pendingCount = list.length - freeCount;
+    const p = Math.min(100, oldest.held_days/365*100);
     return `<div class="lot">
-      <div><div class="title">${nfx(l.qty)} ${esc(l.asset)}</div>
-        <div class="note-s">gekauft ${day(l.acquired)}${
-          l.cost_eur!=null?` für ${eur(l.cost_eur)}`:""}</div></div>
+      <div><div class="title">${nfx(totalQty)} ${esc(asset)}</div>
+        <div class="note-s">${list.length} Zukäufe${totalCost!=null?` · ${eur(totalCost)} Kosten gesamt`:""}</div></div>
       <div><div class="lotbar"><i style="width:${p}%"></i></div>
-        <div class="note-s" style="margin-top:4px">${l.held_days} von 365 Tagen</div></div>
-      <div class="amt">${l.tax_free
-        ? '<i class="pos">steuerfrei</i>'
-        : `<i>ab ${day(l.free_on)}</i><i class="fee">noch ${l.days_to_free} Tage</i>`}</div>
+        <div class="note-s" style="margin-top:4px">ältester Teil: ${oldest.held_days} von 365 Tagen</div></div>
+      <div class="amt">${pendingCount===0
+        ? '<i class="pos">alles steuerfrei</i>'
+        : `<i>ab ${day(oldest.free_on)}</i><i class="fee">noch ${oldest.days_to_free} Tage</i>`
+          + (freeCount?`<div class="note-s">${freeCount} Zukäufe bereits steuerfrei</div>`:"")}</div>
     </div>`;}).join("");
 
-  const disp = y.par23.disposals.length ? y.par23.disposals.map(d=>`
-    <div class="lot"><div><div class="title">${nfx(d.qty)} ${esc(d.asset)}</div>
-      <div class="note-s">${day(d.acquired)} → ${day(d.sold)} · ${d.held_days} Tage</div></div>
-      <div><span class="tag" data-b="${d.taxable?"par23":"neutral"}">${
-        d.taxable?"steuerpflichtig":"steuerfrei"}</span></div>
-      <div class="amt"><i class="${N(d.gain_eur)>=0?"pos":"neg"}">${
-        d.gain_eur!=null?sgn(d.gain_eur)+" €":"Kurs fehlt"}</i></div></div>`).join("")
+  // Veraeusserungen zu Tag+Asset zusammenfassen - bei haeufigem Handel
+  // (Funding jede Stunde, Gebuehren pro Trade) entsteht sonst eine Zeile
+  // pro Cent-Betrag. Eine Zeile pro Tag summiert das sinnvoll, ohne die
+  // Information zu verlieren (Buchungsanzahl bleibt sichtbar).
+  const dispGroups = {};
+  y.par23.disposals.forEach(d=>{
+    const key = d.sold+"|"+d.asset;
+    const g = dispGroups[key] = dispGroups[key] || {
+      asset:d.asset, sold:d.sold, qty:0, gain:0, gainKnown:true, count:0,
+      taxable:d.taxable, mixed:false, minHeld:d.held_days, maxHeld:d.held_days};
+    g.qty += N(d.qty); g.count++;
+    g.minHeld = Math.min(g.minHeld, d.held_days);
+    g.maxHeld = Math.max(g.maxHeld, d.held_days);
+    if(d.gain_eur!=null) g.gain += N(d.gain_eur); else g.gainKnown = false;
+    if(d.taxable !== g.taxable) g.mixed = true;
+  });
+  const dispList = Object.values(dispGroups).sort((a,b)=> a.sold<b.sold?-1:1);
+  const disp = dispList.length ? dispList.map(g=>`
+    <div class="lot"><div><div class="title">${nfx(g.qty)} ${esc(g.asset)}</div>
+      <div class="note-s">${day(g.sold)} · ${g.count} Buchung${g.count>1?"en":""}${
+        g.minHeld===g.maxHeld?` · ${g.minHeld} Tage gehalten`:` · ${g.minHeld}–${g.maxHeld} Tage gehalten`}</div></div>
+      <div><span class="tag" data-b="${g.mixed||g.taxable?"par23":"neutral"}">${
+        g.mixed?"gemischt":(g.taxable?"steuerpflichtig":"steuerfrei")}</span></div>
+      <div class="amt"><i class="${g.gain>=0?"pos":"neg"}">${
+        g.gainKnown?sgn(g.gain)+" €":"Kurs fehlt"}</i></div></div>`).join("")
     : `<div class="note" style="padding:16px 20px">Keine Veräußerungen in ${YEAR}.
        Solange du nur zukaufst, entsteht nach § 23 nichts Steuerpflichtiges.</div>`;
 
@@ -1126,9 +1159,13 @@ function taxPanel(){
     <div class="taxgrid">${card23}${card20}${card22}</div>
     ${carryCard}
     <div class="sect">Offene Bestände und Haltefristen</div>
+    <div class="note" style="padding:0 20px 10px">Je Asset zusammengefasst - der älteste
+      Zukauf bestimmt den Balken, weil er nach FIFO zuerst steuerfrei wird.</div>
     <div class="card">${lots || `<div class="note" style="padding:16px 20px">
       Keine offenen Bestände.</div>`}</div>
     <div class="sect">Veräußerungen ${YEAR}</div>
+    <div class="note" style="padding:0 20px 10px">Je Tag und Asset zusammengefasst - bei
+      häufigem Handel (Funding, Gebühren) sonst unübersichtlich viele Kleinstbeträge.</div>
     <div class="card">${disp}</div>
     <div class="actions noprint" style="margin-top:20px;border:none;padding-top:0">
       <button class="act primary" id="btnPdf">PDF herunterladen (Deckblatt + Buchungsliste)</button>
