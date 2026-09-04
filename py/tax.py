@@ -412,11 +412,15 @@ async def build_report(conn, fetcher=None):
         c23 = carry.get((y, "par23"), {}).get("amount", Decimal(0))
         c20 = carry.get((y, "par20"), {}).get("amount", Decimal(0))
         c22 = carry.get((y, "par22"), {}).get("amount", Decimal(0))
-        gain_after = gain - c23
+        # result_after_carry statt einfacher Subtraktion: ein echter Verlust
+        # bleibt unveraendert sichtbar, statt mit einem u.U. viel groesseren
+        # alten Verlustvortrag zu einer irrefuehrenden Zahl verrechnet zu
+        # werden (nur ein Gewinn wird durch den Vortrag gemindert).
+        gain_after = result_after_carry(gain, c23)
         r20_after = result_after_carry(r20, c20)
         r20_taxable = (max(r20_after - SPARERPAUSCHBETRAG, Decimal(0))
                       if r20 >= 0 else r20_after)
-        sum22_after = sum22 - c22
+        sum22_after = result_after_carry(sum22, c22)
 
         out_years.append({
             "year": y,

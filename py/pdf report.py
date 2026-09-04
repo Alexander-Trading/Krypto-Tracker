@@ -167,13 +167,54 @@ def _cover(report, year, meta_text, styles):
         flow.append(Spacer(1, 10))
 
     p23, p20, p22 = y["par23"], y["par20"], y["par22"]
+    p23_gain = Decimal(str(p23["gain"]))
+    p23_carry_in = Decimal(str(p23["lossCarryIn"]))
+    p23_fg = Decimal(str(p23["freigrenze"]))
+    p23_taxable = Decimal(str(p23["taxable"]))
+    p23_loss = p23_gain < 0
+    p23_status = "Jahresverlust" if p23_loss else (
+        "unter Freigrenze" if not p23["exceeded"] else "Freigrenze überschritten")
     flow.append(_pot_table(
         styles, "§ 23 EStG", "Private Veräußerungsgeschäfte",
-        f"{p23['count']} steuerpflichtig · {p23['countTaxFree']} steuerfrei"
-        + (f" · Verlustvortrag {_money(p23['lossCarryIn'])}" if p23["lossCarryIn"] else ""),
-        p23["taxable"],
-        "unter Freigrenze" if not p23["exceeded"] else "Freigrenze überschritten",
-        not p23["exceeded"], "par23"))
+        f"{p23['count']} steuerpflichtig · {p23['countTaxFree']} steuerfrei",
+        p23["gain"], p23_status, not p23_loss, "par23"))
+
+    # Freigrenze ist Alles-oder-Nichts (anders als der Sparerpauschbetrag bei
+    # §20): unter der Grenze komplett steuerfrei, drueber der GESAMTE Betrag
+    # steuerpflichtig, nicht nur der Ueberschuss. Deshalb hier kein Abzugs-
+    # Balken wie bei §20, sondern nur "wie nah an der Grenze".
+    if p23_carry_in or (not p23_loss and p23_gain > 0):
+        indent23 = ParagraphStyle("indent23", parent=styles["potmeta"], leftIndent=13)
+        carry_used = min(p23_carry_in, p23_gain) if not p23_loss else Decimal(0)
+        carry_remaining = p23_carry_in - carry_used
+        if p23_carry_in:
+            flow.append(Spacer(1, 4))
+            flow.append(Paragraph(
+                f"Verlustvortrag: {_money(carry_used)} von {_money(p23_carry_in)} "
+                f"verrechnet" + (f" · {_money(carry_remaining)} übrig" if carry_remaining else ""),
+                indent23))
+            flow.append(Spacer(1, 2))
+            pct_carry = float(carry_used / p23_carry_in * 100) if p23_carry_in else 0
+            flow.append(Table([[_bar(pct_carry, COL["par23"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
+        if not p23_loss and p23_gain > 0:
+            after_carry = max(p23_gain - carry_used, Decimal(0))
+            flow.append(Spacer(1, 6))
+            flow.append(Paragraph(
+                f"Freigrenze: {_money(after_carry)} von {_money(p23_fg)} - "
+                + ("darunter, komplett steuerfrei" if after_carry <= p23_fg else
+                   f"überschritten, GESAMTER Betrag steuerpflichtig: {_money(p23_taxable)}"),
+                indent23))
+            flow.append(Spacer(1, 2))
+            pct_fg = float(min(after_carry, p23_fg) / p23_fg * 100) if p23_fg else 0
+            flow.append(Table([[_bar(pct_fg, COL["par23"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
     flow.append(Spacer(1, 8))
     p20_result = Decimal(str(p20["result"]))
     p20_carry_in = Decimal(str(p20["lossCarryIn"]))
@@ -223,13 +264,50 @@ def _cover(report, year, meta_text, styles):
                                                 ("TOPPADDING", (0, 0), (-1, -1), 0),
                                                 ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
     flow.append(Spacer(1, 8))
+    p22_result = Decimal(str(p22["result"]))
+    p22_carry_in = Decimal(str(p22["lossCarryIn"]))
+    p22_fg = Decimal(str(p22["freigrenze"])) if "freigrenze" in p22 else Decimal(256)
+    p22_taxable = Decimal(str(p22["taxable"]))
+    p22_loss = p22_result < 0
+    p22_status = "Jahresverlust" if p22_loss else (
+        "unter Freigrenze" if not p22["exceeded"] else "Freigrenze überschritten")
     flow.append(_pot_table(
         styles, "§ 22 Nr. 3 EStG", "Sonstige Einkünfte",
-        f"{p22['count']} Buchungen"
-        + (f" · Verlustvortrag {_money(p22['lossCarryIn'])}" if p22["lossCarryIn"] else ""),
-        p22["taxable"],
-        "unter Freigrenze" if not p22["exceeded"] else "Freigrenze überschritten",
-        not p22["exceeded"], "par22"))
+        f"{p22['count']} Buchungen",
+        p22["result"], p22_status, not p22_loss, "par22"))
+
+    if p22_carry_in or (not p22_loss and p22_result > 0):
+        indent22 = ParagraphStyle("indent22", parent=styles["potmeta"], leftIndent=13)
+        carry_used = min(p22_carry_in, p22_result) if not p22_loss else Decimal(0)
+        carry_remaining = p22_carry_in - carry_used
+        if p22_carry_in:
+            flow.append(Spacer(1, 4))
+            flow.append(Paragraph(
+                f"Verlustvortrag: {_money(carry_used)} von {_money(p22_carry_in)} "
+                f"verrechnet" + (f" · {_money(carry_remaining)} übrig" if carry_remaining else ""),
+                indent22))
+            flow.append(Spacer(1, 2))
+            pct_carry = float(carry_used / p22_carry_in * 100) if p22_carry_in else 0
+            flow.append(Table([[_bar(pct_carry, COL["par22"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
+        if not p22_loss and p22_result > 0:
+            after_carry = max(p22_result - carry_used, Decimal(0))
+            flow.append(Spacer(1, 6))
+            flow.append(Paragraph(
+                f"Freigrenze: {_money(after_carry)} von {_money(p22_fg)} - "
+                + ("darunter, komplett steuerfrei" if after_carry <= p22_fg else
+                   f"überschritten, GESAMTER Betrag steuerpflichtig: {_money(p22_taxable)}"),
+                indent22))
+            flow.append(Spacer(1, 2))
+            pct_fg = float(min(after_carry, p22_fg) / p22_fg * 100) if p22_fg else 0
+            flow.append(Table([[_bar(pct_fg, COL["par22"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
 
     flow.append(Spacer(1, 16))
     flow.append(HRFlowable(width="100%", color=LINE, thickness=0.7))
