@@ -108,6 +108,19 @@ async def build_rate_lookup(conn, assets, days, fetcher=None):
             continue
         for day in days:
             key = (asset, day)
+            # Exakter eigener Kurs an GENAU diesem Tag geht vor jeder
+            # externen Schaetzung - das ist der tatsaechlich gezahlte
+            # Kurs, kein Naeherungswert. Frueher stand ein zwischengespei-
+            # cherter/externer Tageskurs davor, was bei einem EUR<->Asset-
+            # Umtausch am selben Tag ein kuenstliches, aber falsches
+            # Gewinn/Verlust-Rauschen erzeugt hat (der externe Tageskurs
+            # weicht vom tatsaechlichen Ausfuehrungskurs immer leicht ab).
+            own_today = (own.get(asset) or {}).get(day)
+            if own_today is not None:
+                table[key] = own_today
+                sources[asset] = "aus eigenem Umtausch an diesem Tag (exakt)"
+                continue
+
             r = cached_rate(conn, asset, day)
             if r is not None:
                 table[key] = r
@@ -148,7 +161,16 @@ def to_eur(table, asset, day, amount):
 
 def build_lots(conn, table):
     """Laeuft chronologisch durch alle Zugaenge und Abgaenge und fuehrt je
-    Asset eine FIFO-Schlange. Gibt Veraeusserungen und offene Lots zurueck."""
+    Asset eine FIFO-Schlange. Gibt Veraeusserungen und offene Lots zurueck.
+
+    Wichtig: das umfasst ALLE Buchungen, nicht nur die mit tax_bucket
+    'par23'/'par22'/'neutral'. Nach BMF-Schreiben vom 6.3.2025 gilt jede
+    Verwendung von Kryptowerten als Zahlungsmittel - auch fuer Trading-
+    Gebuehren oder Funding-Zahlungen bei Futures (§20-Buchungen) - selbst
+    als privates Veraeusserungsgeschaeft nach §23 EStG, zusaetzlich zum
+    eigentlichen §20-Ergebnis der Position. Fruehere Version hat §20-
+    Buchungen hier komplett ausgeklammert und dadurch USDC-Ausgaben fuer
+    Gebuehren/Funding gar nicht als Veraeusserung erfasst."""
     lots = {}          # asset -> deque von {menge, kosten_eur, datum}
     disposals = []
     warnings = []
@@ -156,7 +178,6 @@ def build_lots(conn, table):
     rows = conn.execute(
         """SELECT t.id, t.ts_utc, t.tx_type, t.tax_bucket, t.note
            FROM transactions t
-           WHERE t.tax_bucket IN ('par23','par22','neutral')
            ORDER BY t.ts_utc, t.id""").fetchall()
 
     for t in rows:
@@ -623,12 +644,15 @@ TX_TYPE_LABELS = {
 
 
 def report_csv(report):
-    """Baut drei klar getrennte, jeweils in sich einheitliche Tabellen:
-    Kennzahlen je Jahr/Topf, eine Buchungszeile pro Vorgang (feste Spalten,
-    egal ob §23/§20/§22), und die offenen (noch nicht verkauften) Bestaende.
-    Zahlen stehen als echte Dezimalzahlen mit Punkt, nicht als lokalisierter
-    Text - damit Excel/Numbers/Sheets sie direkt als Zahl erkennen und man
-    filtern/summieren/pivotieren kann, ohne vorher Text-in-Zahlen umzuwandeln.
+    """Vier klar getrennte Tabellen: Kennzahlen je Jahr/Topf, eine
+    Buchungszeile pro Vorgang (feste Spalten, alle Steuertoepfe inkl.
+    neutraler Buchungen - jede Buchung genau einmal), die daraus per FIFO
+    erkannten Veraeusserungen nach §23 (das ist die einzige Stelle mit einer
+    zweiten, ueberschneidenden Sicht - weil sie echten Mehrwert bringt: den
+    berechneten Gewinn/Verlust je Abgang statt nur die Rohdaten), und die
+    offenen (noch nicht verkauften) Bestaende. Zahlen stehen als echte
+    Dezimalzahlen mit Punkt, nicht als lokalisierter Text - damit Excel/
+    Numbers/Sheets sie direkt als Zahl erkennen.
     """
     lines = []
 
@@ -655,43 +679,7 @@ def report_csv(report):
             lines.append(_csv_row([yr, topf, feld, num(wert)]))
 
     lines.append("")
-    lines.append("# BUCHUNGEN")
-    lines.append(_csv_row([
-        "Jahr", "Steuertopf", "Datum", "Typ", "Beschreibung", "Menge", "Asset",
-        "Erworben_am", "Haltedauer_Tage", "Steuerpflichtig",
-        "Native_Buchungszeilen", "Betrag_EUR",
-    ]))
-    for y in report["years"]:
-        yr = y["year"]
-        for d in y["par23"]["disposals"]:
-            lines.append(_csv_row([
-                yr, "§23", d["sold"], "Verkauf", d["note"] or "",
-                num(d["qty"], "0.00000001"), d["asset"], d["acquired"],
-                d["held_days"], "Ja" if d["taxable"] else "Nein", "",
-                num(d["gain_eur"]),
-            ]))
-        for topf, key in (("§20", "par20"), ("§22", "par22")):
-            for r in y[key]["rows"]:
-                native = "; ".join(
-                    f"{num(n['amount'], '0.00000001')} {n['asset']}"
-                    + (" (Gebühr)" if n["kind"] == "fee" else "")
-                    for n in r["native"])
-                lines.append(_csv_row([
-                    yr, topf, r["date"], TX_TYPE_LABELS.get(r["txType"], r["txType"]),
-                    r["note"] or "", "", "", "", "", "", native, num(r["eur"]),
-                ]))
-
-    lines.append("")
-    lines.append("# OFFENE_BESTAENDE")
-    lines.append(_csv_row(["Asset", "Menge", "Erworben_am", "Steuerfrei_ab", "Tage_bis_steuerfrei"]))
-    for lot in report["openLots"]:
-        lines.append(_csv_row([
-            lot["asset"], num(lot["qty"], "0.00000001"), lot["acquired"],
-            lot["free_on"], lot["days_to_free"],
-        ]))
-
-    lines.append("")
-    lines.append("# ALLE_BUCHUNGEN (jede Transaktion, nach Steuertopf - auch neutrale)")
+    lines.append("# BUCHUNGEN (jede Transaktion genau einmal, nach Steuertopf - auch neutrale)")
     lines.append(_csv_row([
         "Jahr", "Steuertopf", "Datum", "Typ", "Beschreibung",
         "Native_Buchungszeilen", "Betrag_EUR",
@@ -709,5 +697,30 @@ def report_csv(report):
                     TX_TYPE_LABELS.get(r["txType"], r["txType"]),
                     r["note"] or "", native, num(r["eur"]),
                 ]))
+
+    lines.append("")
+    lines.append("# VERAEUSSERUNGEN_FIFO (§23 - berechneter Gewinn/Verlust je Abgang, "
+                 "FIFO ueber ALLE Buchungen inkl. z.B. Trading-Gebuehren/Funding in USDC)")
+    lines.append(_csv_row([
+        "Jahr", "Datum", "Asset", "Menge", "Erworben_am", "Haltedauer_Tage",
+        "Steuerpflichtig", "Beschreibung", "Gewinn_Verlust_EUR",
+    ]))
+    for y in report["years"]:
+        yr = y["year"]
+        for d in y["par23"]["disposals"]:
+            lines.append(_csv_row([
+                yr, d["sold"], d["asset"], num(d["qty"], "0.00000001"),
+                d["acquired"], d["held_days"], "Ja" if d["taxable"] else "Nein",
+                d["note"] or "", num(d["gain_eur"]),
+            ]))
+
+    lines.append("")
+    lines.append("# OFFENE_BESTAENDE")
+    lines.append(_csv_row(["Asset", "Menge", "Erworben_am", "Steuerfrei_ab", "Tage_bis_steuerfrei"]))
+    for lot in report["openLots"]:
+        lines.append(_csv_row([
+            lot["asset"], num(lot["qty"], "0.00000001"), lot["acquired"],
+            lot["free_on"], lot["days_to_free"],
+        ]))
 
     return "\n".join(lines)

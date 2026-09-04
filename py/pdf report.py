@@ -127,6 +127,27 @@ def _pot_table(styles, law, name, meta, value, status_text, status_ok, bucket_ke
     return outer
 
 
+def _bar(pct, fill_color, width_mm=165, height_mm=2.2, bg=LINE):
+    """Schmaler Fortschrittsbalken (z.B. genutzter Verlustvortrag), passend
+    zur Breite der Pot-Tabelle."""
+    pct = max(0, min(100, pct))
+    fw = width_mm * pct / 100
+    cells = [[""]] if fw <= 0 else [["", ""]]
+    widths = [width_mm] if fw <= 0 else [fw, width_mm - fw]
+    t = Table(cells, colWidths=[w * mm for w in widths], rowHeights=[height_mm * mm])
+    style = [
+        ("TOPPADDING", (0, 0), (-1, -1), 0), ("BOTTOMPADDING", (0, 0), (-1, -1), 0),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]
+    if fw <= 0:
+        style.append(("BACKGROUND", (0, 0), (0, 0), bg))
+    else:
+        style.append(("BACKGROUND", (0, 0), (0, 0), fill_color))
+        style.append(("BACKGROUND", (1, 0), (1, 0), bg))
+    t.setStyle(TableStyle(style))
+    return t
+
+
 def _cover(report, year, meta_text, styles):
     y = next(v for v in report["years"] if v["year"] == year)
     flow = [
@@ -154,18 +175,53 @@ def _cover(report, year, meta_text, styles):
         "unter Freigrenze" if not p23["exceeded"] else "Freigrenze überschritten",
         not p23["exceeded"], "par23"))
     flow.append(Spacer(1, 8))
-    p20_loss = p20["result"] < 0
-    p20_status = (
-        "Jahresverlust" if p20_loss else
-        "durch Verlustvortrag ausgeglichen" if p20["resultAfterCarry"] <= 0 else
-        "Sparerpauschbetrag überschritten" if p20["exceeded"] else
-        "unter Sparerpauschbetrag")
+    p20_result = Decimal(str(p20["result"]))
+    p20_carry_in = Decimal(str(p20["lossCarryIn"]))
+    p20_pausch = Decimal(str(p20["sparerpauschbetrag"]))
+    p20_taxable = Decimal(str(p20["taxable"]))
+    p20_loss = p20_result < 0
+    p20_status = "Jahresverlust" if p20_loss else "Jahresgewinn"
     flow.append(_pot_table(
         styles, "§ 20 EStG · Anlage KAP", "Termingeschäfte",
-        f"{p20['count']} Buchungen"
-        + (f" · Verlustvortrag {_money(p20['lossCarryIn'])}" if p20["lossCarryIn"] else "")
-        + (f" · Sparerpauschbetrag {_money(p20['sparerpauschbetrag'])}" if not p20_loss else ""),
-        p20["taxable"], p20_status, not p20["exceeded"], "par20"))
+        f"{p20['count']} Buchungen",
+        p20["result"], p20_status, True, "par20"))
+
+    # Verlustvortrag/Sparerpauschbetrag mindern nur, was in der
+    # Steuererklärung als Ertrag landet - das tatsächliche Jahresergebnis
+    # oben bleibt davon unberührt. Hier nur als Zusatzinfo mit Balken, damit
+    # nachvollziehbar ist, wie sich der steuerpflichtige Betrag ergibt.
+    if p20_carry_in or (not p20_loss and p20_result > 0):
+        carry_used = min(p20_carry_in, p20_result) if not p20_loss else Decimal(0)
+        carry_remaining = p20_carry_in - carry_used
+        indent = ParagraphStyle("indent20", parent=styles["potmeta"], leftIndent=13)
+        if p20_carry_in:
+            flow.append(Spacer(1, 4))
+            flow.append(Paragraph(
+                f"Verlustvortrag: {_money(carry_used)} von {_money(p20_carry_in)} "
+                f"verrechnet" + (f" · {_money(carry_remaining)} übrig" if carry_remaining else ""),
+                indent))
+            flow.append(Spacer(1, 2))
+            pct_carry = float(carry_used / p20_carry_in * 100) if p20_carry_in else 0
+            flow.append(Table([[_bar(pct_carry, COL["par20"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
+        if not p20_loss and p20_result > 0:
+            after_carry = max(p20_result - carry_used, Decimal(0))
+            pausch_used = min(after_carry, p20_pausch)
+            flow.append(Spacer(1, 6))
+            flow.append(Paragraph(
+                f"Sparerpauschbetrag: {_money(pausch_used)} von {_money(p20_pausch)} "
+                f"genutzt · steuerpflichtig lt. Steuererklärung: {_money(p20_taxable)}",
+                indent))
+            flow.append(Spacer(1, 2))
+            pct_pausch = float(pausch_used / p20_pausch * 100) if p20_pausch else 0
+            flow.append(Table([[_bar(pct_pausch, COL["par20"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
     flow.append(Spacer(1, 8))
     flow.append(_pot_table(
         styles, "§ 22 Nr. 3 EStG", "Sonstige Einkünfte",
@@ -235,14 +291,6 @@ def _par23_rows(disposals):
     return out
 
 
-def _flat_rows(rows):
-    out = []
-    for r in rows:
-        desc = r["note"] or r["txType"]
-        out.append((_day(r["date"]), desc, "", _money(r["eur"])))
-    return out
-
-
 def _native_str(native):
     parts = []
     for n in native:
@@ -305,34 +353,16 @@ def build_pdf(report, year, meta_text) -> bytes:
     flow.append(PageBreak())
 
     y = next(v for v in report["years"] if v["year"] == year)
-    sections = [
-        ("par23", "§ 23 — Private Veräußerungsgeschäfte",
-         _par23_rows(y["par23"]["disposals"]), y["par23"]["count"] + y["par23"]["countTaxFree"]),
-        ("par20", "§ 20 — Termingeschäfte (Futures)",
-         _flat_rows(y["par20"]["rows"]), y["par20"]["count"]),
-        ("par22", "§ 22 — Sonstige Einkünfte",
-         _flat_rows(y["par22"]["rows"]), y["par22"]["count"]),
-    ]
 
-    flow.append(Paragraph(f"Buchungen {year}, gruppiert nach Steuertopf", styles["h2"]))
+    # Eine einzige Buchungsliste je Steuertopf (vorher gab es die Liste
+    # zweimal: einmal "gruppiert" und nochmal als "Anhang" - identischer
+    # Inhalt bei §20/§22, nur bei §23 kam eine andere Sicht (nur die reinen
+    # Veraeusserungen) dazu. Jetzt: eine Liste mit allen Buchungen je Topf,
+    # bei §23 zusaetzlich eine kompakte FIFO-Detailtabelle direkt darunter -
+    # das ist die einzige Stelle, an der eine zweite Tabelle echten
+    # Mehrwert hat (berechneter Gewinn/Verlust statt nur Rohdaten).
+    flow.append(Paragraph(f"Buchungen {year}, nach Steuertopf", styles["h2"]))
     flow.append(Spacer(1, 4))
-
-    for key, title, rows, count in sections:
-        flow.append(_group_header(styles, key, title, count))
-        if rows:
-            flow.append(_rows_table(styles, rows))
-        else:
-            flow.append(Spacer(1, 4))
-            flow.append(Paragraph("Keine Buchungen in diesem Jahr.", styles["note"]))
-        flow.append(Spacer(1, 14))
-
-    # --- Anhang: wirklich jede Buchung, nach Steuertopf, auch neutrale -----
-    flow.append(PageBreak())
-    flow.append(Paragraph(f"Anhang — alle Buchungen {year}, nach Steuertopf", styles["h2"]))
-    flow.append(Paragraph(
-        "Vollständige Liste, unabhängig davon, ob eine Buchung steuerlich relevant "
-        "ist - zur Nachvollziehbarkeit jeder einzelnen Zahl oben.", styles["note"]))
-    flow.append(Spacer(1, 8))
 
     all_by_bucket = y.get("allByBucket", {})
     for bucket in TAX.ALL_BUCKETS:
@@ -343,6 +373,22 @@ def build_pdf(report, year, meta_text) -> bytes:
         else:
             flow.append(Spacer(1, 4))
             flow.append(Paragraph("Keine Buchungen in diesem Jahr.", styles["note"]))
+
+        if bucket == "par23":
+            disposals = y["par23"]["disposals"]
+            n = y["par23"]["count"] + y["par23"]["countTaxFree"]
+            flow.append(Spacer(1, 8))
+            flow.append(Paragraph(
+                f"davon als Veräußerung erkannt (FIFO-Zuordnung Anschaffung → "
+                f"Abgang): {n}", styles["potmeta"]))
+            flow.append(Spacer(1, 4))
+            if disposals:
+                flow.append(_rows_table(styles, _par23_rows(disposals)))
+            else:
+                flow.append(Paragraph(
+                    "Keine erkannten Veräußerungen - bisher wurde in diesem "
+                    "Jahr nur angeschafft, nichts abgegeben.", styles["note"]))
+
         flow.append(Spacer(1, 14))
 
     def _canvasmaker(*args, **kwargs):
