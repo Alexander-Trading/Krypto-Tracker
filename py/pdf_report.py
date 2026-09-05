@@ -167,13 +167,54 @@ def _cover(report, year, meta_text, styles):
         flow.append(Spacer(1, 10))
 
     p23, p20, p22 = y["par23"], y["par20"], y["par22"]
+    p23_gain = Decimal(str(p23["gain"]))
+    p23_carry_in = Decimal(str(p23["lossCarryIn"]))
+    p23_fg = Decimal(str(p23["freigrenze"]))
+    p23_taxable = Decimal(str(p23["taxable"]))
+    p23_loss = p23_gain < 0
+    p23_status = "Jahresverlust" if p23_loss else (
+        "unter Freigrenze" if not p23["exceeded"] else "Freigrenze überschritten")
     flow.append(_pot_table(
         styles, "§ 23 EStG", "Private Veräußerungsgeschäfte",
-        f"{p23['count']} steuerpflichtig · {p23['countTaxFree']} steuerfrei"
-        + (f" · Verlustvortrag {_money(p23['lossCarryIn'])}" if p23["lossCarryIn"] else ""),
-        p23["taxable"],
-        "unter Freigrenze" if not p23["exceeded"] else "Freigrenze überschritten",
-        not p23["exceeded"], "par23"))
+        f"{p23['count']} steuerpflichtig · {p23['countTaxFree']} steuerfrei",
+        p23["gain"], p23_status, not p23_loss, "par23"))
+
+    # Freigrenze ist Alles-oder-Nichts (anders als der Sparerpauschbetrag bei
+    # §20): unter der Grenze komplett steuerfrei, drueber der GESAMTE Betrag
+    # steuerpflichtig, nicht nur der Ueberschuss. Deshalb hier kein Abzugs-
+    # Balken wie bei §20, sondern nur "wie nah an der Grenze".
+    if p23_carry_in or (not p23_loss and p23_gain > 0):
+        indent23 = ParagraphStyle("indent23", parent=styles["potmeta"], leftIndent=13)
+        carry_used = min(p23_carry_in, p23_gain) if not p23_loss else Decimal(0)
+        carry_remaining = p23_carry_in - carry_used
+        if p23_carry_in:
+            flow.append(Spacer(1, 4))
+            flow.append(Paragraph(
+                f"Verlustvortrag: {_money(carry_used)} von {_money(p23_carry_in)} "
+                f"verrechnet" + (f" · {_money(carry_remaining)} übrig" if carry_remaining else ""),
+                indent23))
+            flow.append(Spacer(1, 2))
+            pct_carry = float(carry_used / p23_carry_in * 100) if p23_carry_in else 0
+            flow.append(Table([[_bar(pct_carry, COL["par23"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
+        if not p23_loss and p23_gain > 0:
+            after_carry = max(p23_gain - carry_used, Decimal(0))
+            flow.append(Spacer(1, 6))
+            flow.append(Paragraph(
+                f"Freigrenze: {_money(after_carry)} von {_money(p23_fg)} - "
+                + ("darunter, komplett steuerfrei" if after_carry <= p23_fg else
+                   f"überschritten, GESAMTER Betrag steuerpflichtig: {_money(p23_taxable)}"),
+                indent23))
+            flow.append(Spacer(1, 2))
+            pct_fg = float(min(after_carry, p23_fg) / p23_fg * 100) if p23_fg else 0
+            flow.append(Table([[_bar(pct_fg, COL["par23"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
     flow.append(Spacer(1, 8))
     p20_result = Decimal(str(p20["result"]))
     p20_carry_in = Decimal(str(p20["lossCarryIn"]))
@@ -223,13 +264,50 @@ def _cover(report, year, meta_text, styles):
                                                 ("TOPPADDING", (0, 0), (-1, -1), 0),
                                                 ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
     flow.append(Spacer(1, 8))
+    p22_result = Decimal(str(p22["result"]))
+    p22_carry_in = Decimal(str(p22["lossCarryIn"]))
+    p22_fg = Decimal(str(p22["freigrenze"])) if "freigrenze" in p22 else Decimal(256)
+    p22_taxable = Decimal(str(p22["taxable"]))
+    p22_loss = p22_result < 0
+    p22_status = "Jahresverlust" if p22_loss else (
+        "unter Freigrenze" if not p22["exceeded"] else "Freigrenze überschritten")
     flow.append(_pot_table(
         styles, "§ 22 Nr. 3 EStG", "Sonstige Einkünfte",
-        f"{p22['count']} Buchungen"
-        + (f" · Verlustvortrag {_money(p22['lossCarryIn'])}" if p22["lossCarryIn"] else ""),
-        p22["taxable"],
-        "unter Freigrenze" if not p22["exceeded"] else "Freigrenze überschritten",
-        not p22["exceeded"], "par22"))
+        f"{p22['count']} Buchungen",
+        p22["result"], p22_status, not p22_loss, "par22"))
+
+    if p22_carry_in or (not p22_loss and p22_result > 0):
+        indent22 = ParagraphStyle("indent22", parent=styles["potmeta"], leftIndent=13)
+        carry_used = min(p22_carry_in, p22_result) if not p22_loss else Decimal(0)
+        carry_remaining = p22_carry_in - carry_used
+        if p22_carry_in:
+            flow.append(Spacer(1, 4))
+            flow.append(Paragraph(
+                f"Verlustvortrag: {_money(carry_used)} von {_money(p22_carry_in)} "
+                f"verrechnet" + (f" · {_money(carry_remaining)} übrig" if carry_remaining else ""),
+                indent22))
+            flow.append(Spacer(1, 2))
+            pct_carry = float(carry_used / p22_carry_in * 100) if p22_carry_in else 0
+            flow.append(Table([[_bar(pct_carry, COL["par22"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
+        if not p22_loss and p22_result > 0:
+            after_carry = max(p22_result - carry_used, Decimal(0))
+            flow.append(Spacer(1, 6))
+            flow.append(Paragraph(
+                f"Freigrenze: {_money(after_carry)} von {_money(p22_fg)} - "
+                + ("darunter, komplett steuerfrei" if after_carry <= p22_fg else
+                   f"überschritten, GESAMTER Betrag steuerpflichtig: {_money(p22_taxable)}"),
+                indent22))
+            flow.append(Spacer(1, 2))
+            pct_fg = float(min(after_carry, p22_fg) / p22_fg * 100) if p22_fg else 0
+            flow.append(Table([[_bar(pct_fg, COL["par22"], width_mm=152)]],
+                              colWidths=[165 * mm],
+                              style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
+                                                ("TOPPADDING", (0, 0), (-1, -1), 0),
+                                                ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
 
     flow.append(Spacer(1, 16))
     flow.append(HRFlowable(width="100%", color=LINE, thickness=0.7))
@@ -288,14 +366,6 @@ def _par23_rows(disposals):
               ("steuerpflichtig" if d["taxable"] else "steuerfrei")
         out.append((_day(d["sold"]), f"{d['qty']} {d['asset']} verkauft", sub,
                     _money(d["gain_eur"])))
-    return out
-
-
-def _flat_rows(rows):
-    out = []
-    for r in rows:
-        desc = r["note"] or r["txType"]
-        out.append((_day(r["date"]), desc, "", _money(r["eur"])))
     return out
 
 
@@ -361,34 +431,16 @@ def build_pdf(report, year, meta_text) -> bytes:
     flow.append(PageBreak())
 
     y = next(v for v in report["years"] if v["year"] == year)
-    sections = [
-        ("par23", "§ 23 — Private Veräußerungsgeschäfte",
-         _par23_rows(y["par23"]["disposals"]), y["par23"]["count"] + y["par23"]["countTaxFree"]),
-        ("par20", "§ 20 — Termingeschäfte (Futures)",
-         _flat_rows(y["par20"]["rows"]), y["par20"]["count"]),
-        ("par22", "§ 22 — Sonstige Einkünfte",
-         _flat_rows(y["par22"]["rows"]), y["par22"]["count"]),
-    ]
 
-    flow.append(Paragraph(f"Buchungen {year}, gruppiert nach Steuertopf", styles["h2"]))
+    # Eine einzige Buchungsliste je Steuertopf (vorher gab es die Liste
+    # zweimal: einmal "gruppiert" und nochmal als "Anhang" - identischer
+    # Inhalt bei §20/§22, nur bei §23 kam eine andere Sicht (nur die reinen
+    # Veraeusserungen) dazu. Jetzt: eine Liste mit allen Buchungen je Topf,
+    # bei §23 zusaetzlich eine kompakte FIFO-Detailtabelle direkt darunter -
+    # das ist die einzige Stelle, an der eine zweite Tabelle echten
+    # Mehrwert hat (berechneter Gewinn/Verlust statt nur Rohdaten).
+    flow.append(Paragraph(f"Buchungen {year}, nach Steuertopf", styles["h2"]))
     flow.append(Spacer(1, 4))
-
-    for key, title, rows, count in sections:
-        flow.append(_group_header(styles, key, title, count))
-        if rows:
-            flow.append(_rows_table(styles, rows))
-        else:
-            flow.append(Spacer(1, 4))
-            flow.append(Paragraph("Keine Buchungen in diesem Jahr.", styles["note"]))
-        flow.append(Spacer(1, 14))
-
-    # --- Anhang: wirklich jede Buchung, nach Steuertopf, auch neutrale -----
-    flow.append(PageBreak())
-    flow.append(Paragraph(f"Anhang — alle Buchungen {year}, nach Steuertopf", styles["h2"]))
-    flow.append(Paragraph(
-        "Vollständige Liste, unabhängig davon, ob eine Buchung steuerlich relevant "
-        "ist - zur Nachvollziehbarkeit jeder einzelnen Zahl oben.", styles["note"]))
-    flow.append(Spacer(1, 8))
 
     all_by_bucket = y.get("allByBucket", {})
     for bucket in TAX.ALL_BUCKETS:
@@ -399,6 +451,22 @@ def build_pdf(report, year, meta_text) -> bytes:
         else:
             flow.append(Spacer(1, 4))
             flow.append(Paragraph("Keine Buchungen in diesem Jahr.", styles["note"]))
+
+        if bucket == "par23":
+            disposals = y["par23"]["disposals"]
+            n = y["par23"]["count"] + y["par23"]["countTaxFree"]
+            flow.append(Spacer(1, 8))
+            flow.append(Paragraph(
+                f"davon als Veräußerung erkannt (FIFO-Zuordnung Anschaffung → "
+                f"Abgang): {n}", styles["potmeta"]))
+            flow.append(Spacer(1, 4))
+            if disposals:
+                flow.append(_rows_table(styles, _par23_rows(disposals)))
+            else:
+                flow.append(Paragraph(
+                    "Keine erkannten Veräußerungen - bisher wurde in diesem "
+                    "Jahr nur angeschafft, nichts abgegeben.", styles["note"]))
+
         flow.append(Spacer(1, 14))
 
     def _canvasmaker(*args, **kwargs):
