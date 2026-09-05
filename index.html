@@ -503,7 +503,16 @@ function withPositionEquity(pf, positions, market){
     const costNative = N(p.margin_balance);
     const deltaEur = (equityNative - costNative) * rate;
     extra += deltaEur;
-    if(h){ h.eur = (h.eur!=null?N(h.eur):0) + deltaEur; h.locked = equityNative; }
+    // BUGFIX: vorher "h.locked = equityNative" - das ÜBERSCHRIEB bei mehreren
+    // offenen Positionen in derselben Marge-Währung (z.B. BTC- UND ETH-Position
+    // beide in USDC) den Wert bei jedem Durchlauf, statt ihn zu summieren. Am
+    // Ende blieb nur die zuletzt verarbeitete Position übrig, alle anderen
+    // verschwanden aus der Anzeige "X frei · Y in Position". h.locked kommt
+    // vom Server bereits als Summe der Margin ALLER Positionen dieser Währung
+    // (siehe portfolio() in tax.py) - hier wird nur noch das unrealisierte
+    // Ergebnis JE Position addiert, nicht der ganze equityNative-Wert gesetzt.
+    if(h){ h.eur = (h.eur!=null?N(h.eur):0) + deltaEur;
+      h.locked = (h.locked!=null?N(h.locked):0) + N(mk.unrealizedPnl); }
   });
 
   const totalEur = pf.totalEur != null ? N(pf.totalEur) + extra : null;
