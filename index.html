@@ -546,7 +546,8 @@ function dash(){
         <span style="margin-left:8px">gegenüber ${eur(dep)} eingezahlt</span></div>` : ""}
       <div class="lsplit" style="margin-top:10px">${[
         PF && PF.asOf ? `Bewertet zum ${day(PF.asOf)}` : "",
-        adj.adjustedNote
+        adj.adjustedNote,
+        lastMarketAt ? `Live-Kurs ${lastMarketAt.toLocaleTimeString("de-DE")}` : ""
       ].filter(Boolean).join(" · ")}</div>
     </div>
     <div class="hero-r">
@@ -1254,7 +1255,15 @@ function render(){
   updateReviewBadge();
   const p=$("#panel");
 
-  if(TAB==="dash"){ p.innerHTML=dash(); if(STATE.hasData) loadRecent(); }
+  if(TAB==="dash"){
+    p.innerHTML=dash();
+    // loadRecent() nicht mehr bei jedem 10s-Live-Refresh mitlaufen lassen -
+    // reicht, wenn es beim Betreten des Tabs bzw. hoechstens alle 8s passiert.
+    if(STATE.hasData && Date.now()-lastRecentLoadAt > 8000){
+      lastRecentLoadAt = Date.now();
+      loadRecent();
+    }
+  }
   else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); }
   else if(TAB==="tx"){ p.innerHTML=txPanel(); wireTx(); loadTx(false); }
   else if(TAB==="review"){ p.innerHTML=reviewPanel(); loadReview(); }
@@ -1269,6 +1278,8 @@ function render(){
 // anderen Tabs, um nicht unnoetig CPU/Netzwerk zu verbrauchen (wichtig
 // gerade im Browser, wo pyfetch jeden Abruf ueber echte HTTP-Requests treibt).
 let posAutoRefreshTimer = null;
+let lastMarketAt = null;   // Diagnose: wann kam der letzte Live-Marktdaten-Refresh an
+let lastRecentLoadAt = 0;  // verhindert, dass loadRecent() jetzt bei jedem 10s-Tick mitlaeuft
 function managePosAutoRefresh(){
   if((TAB === "positions" || TAB === "dash") && (STATE.positions||[]).length){
     if(!posAutoRefreshTimer){
@@ -1457,6 +1468,7 @@ document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>go(t.dataset.tab));
 async function refreshMarket(){
   try{
     MARKET=(await api("/api/market")).positions||null;
+    lastMarketAt = new Date();
     // Wurde gerade eine falsch geschaetzte Kontraktgroesse live korrigiert,
     // ist das zwar schon dauerhaft gespeichert, aber STATE.positions (und
     // damit die "Größe"-Anzeige) haengt noch auf dem alten Stand, bis wir
