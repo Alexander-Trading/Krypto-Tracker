@@ -75,6 +75,8 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .themetoggle button.on{background:var(--raise);color:var(--fg)}
 
 /* Kapitalkurve */
+.rangesel{display:inline-flex}
+.rangesel button{padding:5px 9px;font-size:10.5px}
 .curvewrap{margin-top:14px;position:relative;cursor:crosshair}
 .curvesvg{width:100%;height:74px;display:block}
 .curvesvg path.line{fill:none;stroke:var(--a20);stroke-width:2.2;
@@ -437,6 +439,8 @@ const TXL = {deposit:"Einzahlung",withdrawal:"Auszahlung",transfer:"Umbuchung",
 const ORDER = ["unknown","par23","par20","par22","neutral"];
 
 let STATE=null, MARKET=null, PF=null, TAXR=null, CURVE=null, FEES=null, TAB="dash", YEAR=null;
+let CURVE_RANGE = "all";
+const CURVE_RANGES = [["7d","1W"],["30d","1M"],["90d","3M"],["365d","1J"],["all","Alles"]];
 let TXQ={bucket:"",q:"",offset:0,limit:60}, TXD=null;
 
 /* ================= Theme ================= */
@@ -644,24 +648,53 @@ function curveSvg(points){
     <path class="line" d="${line}"></path></svg>`;
 }
 
+function curveRangeSelHtml(){
+  return `<div class="themetoggle rangesel" id="curveRangeSel" style="margin-bottom:12px">${
+    CURVE_RANGES.map(([k,l]) =>
+      `<button class="${CURVE_RANGE===k?"on":""}" data-range="${k}">${l}</button>`).join("")
+  }</div>`;
+}
+
 function curveCardHtml(){
   if(!CURVE) return `<div class="card" style="margin-top:12px"><div class="pad">
     <div class="tile-k">Kapitalkurve</div><div class="note" style="padding:6px 0 0">Lädt…</div></div></div>`;
   const pts = CURVE.points || [];
-  if(pts.length < 2) return "";
+  if(pts.length < 2) return `<div class="card" style="margin-top:12px">
+    <div class="ch"><span class="ct">Kapitalkurve</span></div>
+    <div class="pad">${curveRangeSelHtml()}
+      <div class="note" style="padding:0 0 6px">Für diesen Zeitraum liegen noch keine
+        zwei Datenpunkte vor.</div>
+    </div></div>`;
   return `<div class="card" style="margin-top:12px">
     <div class="ch"><span class="ct">Kapitalkurve</span>
       <span class="eyebrow">${day(pts[0].day)} – ${day(pts[pts.length-1].day)}</span></div>
     <div class="pad">
+      ${curveRangeSelHtml()}
       <div class="curvewrap" id="curveWrap">${curveSvg(pts)}
         <div class="curve-crosshair hidden" id="curveCrosshair"><i></i></div>
         <div class="curve-tip hidden" id="curveTip"></div>
       </div>
-      <div class="tile-s" style="margin-top:6px">Netto-Bestand laut Ledger, ohne tagesaktuelles
-        Ergebnis der offenen Position (das steckt nur im heutigen Portfoliowert oben).${
-          CURVE.missingRatesCount ? ` Für ${CURVE.missingRatesCount} Tag/Asset-Kombinationen fehlte ein Kurs.` : ""
+      <div class="tile-s" style="margin-top:6px">Inkl. unrealisiertem Ergebnis offener
+        Positionen (heutige Größe/heutiger Einstieg rückwirkend auf den Kursverlauf
+        angewendet).${
+          CURVE.missingRatesCount ? ` Für ${CURVE.missingRatesCount} Tag/Kurs-Kombinationen fehlte ein Wert.` : ""
         }</div>
     </div></div>`;
+}
+
+function wireCurveRange(){
+  const sel = $("#curveRangeSel");
+  if(!sel) return;
+  sel.querySelectorAll("button").forEach(b => b.onclick = async () => {
+    if(b.dataset.range === CURVE_RANGE) return;
+    CURVE_RANGE = b.dataset.range;
+    sel.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+    const wrap = $("#curveWrap");
+    if(wrap) wrap.style.opacity = "0.4";
+    try{ CURVE = await api("/api/capital-curve?range=" + CURVE_RANGE); }
+    catch(e){ CURVE = null; }
+    if(TAB === "dash") render();
+  });
 }
 
 function wireCurve(){
@@ -1345,7 +1378,7 @@ function render(){
   updateReviewBadge();
   const p=$("#panel");
 
-  if(TAB==="dash"){ p.innerHTML=dash(); if(STATE.hasData) loadRecent(); wireCurve(); }
+  if(TAB==="dash"){ p.innerHTML=dash(); if(STATE.hasData) loadRecent(); wireCurve(); wireCurveRange(); }
   else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); }
   else if(TAB==="tx"){ p.innerHTML=txPanel(); wireTx(); loadTx(false); }
   else if(TAB==="review"){ p.innerHTML=reviewPanel(); loadReview(); }
@@ -1563,7 +1596,7 @@ async function refreshMarket(){
 async function refreshDerived(){
   try{ PF=await api("/api/portfolio"); }catch(e){ PF=null; }
   try{ TAXR=await api("/api/tax"); }catch(e){ TAXR=null; }
-  try{ CURVE=await api("/api/capital-curve"); }catch(e){ CURVE=null; }
+  try{ CURVE=await api("/api/capital-curve?range="+CURVE_RANGE); }catch(e){ CURVE=null; }
   try{ FEES=await api("/api/fees"); }catch(e){ FEES=null; }
   if(TAB==="dash"||TAB==="tax") render();
 }
