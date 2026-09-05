@@ -304,23 +304,7 @@ def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL, ct_val_map=None):
         fees = sum((L.D(r["Fee"]) for r in fut), Decimal(0))
         size = contracts * inst_ct_val
         latest = max(fut, key=lambda r: r["Time"])
-        earliest_open = min(opens, key=lambda r: r["Time"])
         base = inst.split("-")[0] if "-" in inst else inst
-
-        # Netto-Kontrakte je Tag, end-of-day - fuer die Kapitalkurve. Ohne
-        # das wuerde ein rueckwirkend berechnetes unrealisiertes Ergebnis
-        # immer mit der HEUTIGEN (finalen) Positionsgroesse rechnen, auch
-        # fuer Tage, an denen die Position noch viel kleiner war (z.B. beim
-        # schrittweisen Aufbau) - das uebertreibt vergangene Kursausschlaege
-        # kuenstlich, teils bis ins Negative.
-        running = Decimal(0)
-        by_day = {}
-        for r in sorted(opens, key=lambda r: r["Time"]):
-            s = Decimal(1) if r["Action"].strip() == "Buy" else Decimal(-1)
-            running += L.D(r["Amount"]) * s
-            by_day[to_utc(r["Time"], meta["tz_offset"])[:10]] = running
-        size_history = [{"day": d, "contracts": str(c)}
-                         for d, c in sorted(by_day.items())]
 
         out.append({
             "instrument": inst,
@@ -336,11 +320,6 @@ def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL, ct_val_map=None):
             "margin_balance": margin + funding,
             "settle_ccy": latest["Fee Unit"] or "USDC",
             "as_of": to_utc(latest["Time"], meta["tz_offset"]),
-            # Fruehester Buy/Sell-Zeitpunkt fuer dieses Instrument in der
-            # Datei - Naeherung fuer "seit wann offen" (kennt keine
-            # zwischenzeitliche vollstaendige Glattstellung).
-            "opened_at": to_utc(earliest_open["Time"], meta["tz_offset"]),
-            "size_history": size_history,
         })
 
     return sorted(out, key=lambda p: p["instrument"])

@@ -236,16 +236,6 @@ async def _route_get(path, query, conn):
                     "__filename__": f"steuerreport-{year}.pdf"}
         return rep
 
-    if path == "/api/capital-curve":
-        positions = get_state(conn, "positions") or []
-        instmap = get_state(conn, "instmap") or {}
-        range_key = (q.get("range") or [None])[0]
-        return await TAX.capital_curve(
-            conn, fetcher=MK.eur_rate_on, positions=positions, instmap=instmap,
-            price_fetcher=MK.historic_instrument_price, range_key=range_key,
-            bulk_fetcher=MK.historic_rates_bulk,
-            bulk_price_fetcher=MK.history_candles_bulk)
-
     if path == "/api/fees":
         return TAX.fees_summary(conn)
 
