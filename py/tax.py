@@ -594,22 +594,50 @@ def fees_summary(conn):
 RANGE_DAYS = {"7d": 7, "30d": 30, "90d": 90, "365d": 365}
 
 
+def _range_covered(conn, asset, start_day, end_day):
+    """Grobe Heuristik: ist dieser Zeitraum fuer dieses Asset schon
+    weitgehend im price_cache? Vermeidet unnoetige Bulk-Abrufe, wenn ein
+    Zeitraum kurz nacheinander erneut angefragt wird (z.B. Hin- und
+    Herklicken zwischen Zeitraum-Buttons)."""
+    n = conn.execute(
+        "SELECT COUNT(DISTINCT day) FROM price_cache WHERE asset = ? AND day >= ? AND day <= ?",
+        (asset, start_day, end_day)).fetchone()[0]
+    span = (datetime.fromisoformat(end_day) - datetime.fromisoformat(start_day)).days + 1
+    return n >= span * 0.9
+
+
+def _size_at(size_history, day):
+    """Netto-Kontrakte (vorzeichenbehaftet) zum Ende von `day`, aus der
+    end-of-day-Historie. None, wenn vor dem ersten Eintrag."""
+    result = None
+    for entry in size_history:
+        if entry["day"] > day:
+            break
+        result = L.D(entry["contracts"])
+    return result
+
+
 async def capital_curve(conn, fetcher=None, points=150, positions=None,
-                         instmap=None, price_fetcher=None, range_key=None):
+                         instmap=None, price_fetcher=None, range_key=None,
+                         bulk_fetcher=None, bulk_price_fetcher=None):
     """Portfoliowert an bis zu `points` gleichmaessig verteilten Tagen
     zwischen Start des Zeitraums und heute.
 
-    Enthaelt jetzt auch das unrealisierte Ergebnis aktuell offener
-    Positionen: fuer jeden Tag ab Eroeffnung wird der historische
-    Kontrakt-Kurs von OKX geholt (oeffentlicher Endpunkt, wie bei den
-    EUR-Tageskursen) und die Differenz zum Einstiegspreis wie im Dashboard
-    oben in EUR umgerechnet und aufaddiert.
+    Enthaelt das unrealisierte Ergebnis aktuell offener Positionen: fuer
+    jeden Tag wird die tatsaechliche Positionsgroesse AN DIESEM TAG (aus
+    `size_history`, kumulierte Kontrakte je Tag) mit dem historischen
+    Kontrakt-Kurs von OKX bewertet - nicht die heutige Endgroesse rueckwirkend
+    auf die ganze Historie angewendet. Sonst wuerde eine schrittweise
+    aufgebaute Position vergangene Kursausschlaege krass uebertreiben (bis
+    hin zu einer kuenstlich negativen Kurve), weil rueckwirkend mit mehr
+    Kontrakten gerechnet wuerde, als damals tatsaechlich offen waren.
 
-    Naeherung: die HEUTIGE Positionsgroesse/der heutige Einstiegspreis wird
-    rueckwirkend auf den Kursverlauf angewendet - die tatsaechliche Historie
-    von Nachschuessen oder Teil-Glattstellungen ist unbekannt. Fehlt
-    `opened_at` (alte Imports vor dieser Aenderung), wird das unrealisierte
-    Ergebnis nur fuer den heutigen Punkt angesetzt, nicht rueckwirkend."""
+    Fehlt `size_history` (alte Imports vor dieser Aenderung), Rueckfall auf
+    die vorherige Naeherung: heutige Endgroesse nur fuer den heutigen Punkt.
+
+    Kurse werden gebuendelt fuer den ganzen Zeitraum geholt (wenige Anfragen
+    statt einer pro Tag) und im vorhandenen price_cache zwischengespeichert -
+    sonst dauert ein Zeitraum-Wechsel bei feiner Aufloesung sehr lange."""
     span = conn.execute("SELECT MIN(ts_utc), MAX(ts_utc) FROM transactions").fetchone()
     if not span[0]:
         return {"points": []}
@@ -618,6 +646,7 @@ async def capital_curve(conn, fetcher=None, points=150, positions=None,
     end = datetime.now(timezone.utc)
     range_days = RANGE_DAYS.get(range_key)
     start_bound = max(start, end - timedelta(days=range_days)) if range_days else start
+    start_day, end_day = start_bound.date().isoformat(), end.date().isoformat()
 
     total_days = max(1, (end.date() - start_bound.date()).days)
     step = max(1, total_days // max(1, points - 1))
@@ -630,7 +659,50 @@ async def capital_curve(conn, fetcher=None, points=150, positions=None,
         days.append(end.date().isoformat())
 
     assets = [r[0] for r in conn.execute("SELECT DISTINCT asset FROM entries")]
+
+    # Kurse fuer den GANZEN Zeitraum in wenigen Anfragen vorladen (parallel),
+    # statt dass build_rate_lookup() gleich anschliessend einen einzelnen
+    # Abruf je (Asset, Tag) macht - das war der Grund fuer die lange
+    # Ladezeit bei jedem Zeitraum-Wechsel.
+    if bulk_fetcher:
+        todo = [a for a in assets if a != BASE and not _range_covered(conn, a, start_day, end_day)]
+        import asyncio as _asyncio
+        results = await _asyncio.gather(
+            *(bulk_fetcher(a, start_day, end_day) for a in todo),
+            return_exceptions=True)
+        for asset, res in zip(todo, results):
+            if isinstance(res, Exception) or not res:
+                continue
+            for d2, price in res.items():
+                store_rate(conn, asset, d2, price, "okx")
+
     table, missing, sources = await build_rate_lookup(conn, assets, days, fetcher)
+
+    # Kontrakt-Kurse fuer offene Positionen ebenso im Voraus fuer den ganzen
+    # Zeitraum holen (parallel, ein Abruf je Position statt einer je Tag).
+    if bulk_price_fetcher and positions:
+        import asyncio as _asyncio
+        todo, ranges = [], []
+        for p in positions:
+            inst = p.get("instrument")
+            m = (instmap or {}).get(inst) or {}
+            inst_id = m.get("instId") or inst
+            if not inst_id:
+                continue
+            opened_day = day_of(p["opened_at"]) if p.get("opened_at") else end_day
+            from_day = max(opened_day, start_day)
+            if _range_covered(conn, inst_id, from_day, end_day):
+                continue
+            todo.append(inst_id)
+            ranges.append((from_day, end_day))
+        results = await _asyncio.gather(
+            *(bulk_price_fetcher(inst_id, f, t) for inst_id, (f, t) in zip(todo, ranges)),
+            return_exceptions=True)
+        for inst_id, res in zip(todo, results):
+            if isinstance(res, Exception) or not res:
+                continue
+            for d2, price in res.items():
+                store_native_price(conn, inst_id, d2, price)
 
     # Unrealisiertes Ergebnis offener Positionen, je Tag in EUR.
     pos_by_day = {day: Decimal(0) for day in days}
@@ -638,23 +710,33 @@ async def capital_curve(conn, fetcher=None, points=150, positions=None,
     last_day = days[-1]
     for p in (positions or []):
         inst = p.get("instrument")
-        size = abs(L.D(p.get("size") or 0))
-        if not inst or size == 0 or not price_fetcher:
+        if not inst or not price_fetcher:
             continue
         avg = L.D(p.get("avg_entry") or 0)
+        ct_val = L.D(p.get("ct_val") or 0)
         ccy = p.get("settle_ccy") or "USDC"
-        direction = Decimal(1) if p.get("side") == "long" else Decimal(-1)
         m = (instmap or {}).get(inst) or {}
         inst_id = m.get("instId") or inst
         opened_day = day_of(p["opened_at"]) if p.get("opened_at") else None
+        size_history = p.get("size_history")
 
         for day in days:
-            if opened_day:
-                if day < opened_day:
+            if size_history:
+                contracts = _size_at(size_history, day)
+                if contracts is None or contracts == 0:
                     continue
-            elif day != last_day:
-                # Eroeffnungsdatum unbekannt (Import von vor dieser Aenderung) -
-                # nur "heute" ansetzen, statt eine unbekannte Vergangenheit zu erfinden.
+                size_native = abs(contracts) * ct_val
+                direction = Decimal(1) if contracts > 0 else Decimal(-1)
+            else:
+                # Alter Import ohne size_history: Naeherung wie zuvor - nur
+                # der heutige Punkt bekommt das unrealisierte Ergebnis.
+                if day != last_day:
+                    continue
+                size_native = abs(L.D(p.get("size") or 0))
+                if size_native == 0:
+                    continue
+                direction = Decimal(1) if p.get("side") == "long" else Decimal(-1)
+            if opened_day and day < opened_day:
                 continue
 
             mark = cached_native_price(conn, inst_id, day)
@@ -670,7 +752,7 @@ async def capital_curve(conn, fetcher=None, points=150, positions=None,
             if mark is None or rate is None:
                 missing_mark += 1
                 continue
-            upnl_native = (mark - avg) * size * direction
+            upnl_native = (mark - avg) * size_native * direction
             pos_by_day[day] += upnl_native * rate
 
     out = []
