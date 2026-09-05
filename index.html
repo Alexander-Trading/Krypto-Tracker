@@ -540,8 +540,7 @@ function dash(){
       <span class="swatch" style="background:${ASSETCOL[i%ASSETCOL.length]}"></span>
       <span class="lname">${esc(h.asset)}</span>
       <span class="lval">${eur(h.eur)} · ${nf(N(h.eur)/sum*100,1)} %</span>
-    </div>${N(h.locked)>0?`<div class="lsplit" style="margin:-4px 0 2px 18px">
-      ${nfx(h.free)} frei · ${nfx(h.locked)} in Position (Marktwert)</div>`:""}`).join("");
+    </div>`).join("");
 
   const pos = (STATE.positions||[])[0];
   const mk = (MARKET||[])[0];
