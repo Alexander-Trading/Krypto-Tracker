@@ -300,6 +300,8 @@ button.act.warnish:hover{border-color:var(--alert);color:var(--alert)}
 .actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:28px;padding-top:18px;
   border-top:1px solid var(--line)}
 .spacer{margin-left:auto}
+.codever{margin-top:10px;font-family:var(--mono);font-size:10px;color:var(--faint);
+  text-align:center;cursor:pointer;user-select:text}
 input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radius:8px;
   border:1px solid var(--line-2);background:var(--bg);color:var(--fg);width:110px}
 @media (prefers-reduced-motion:reduce){*{transition:none!important}}
@@ -375,6 +377,7 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
     <button class="act warnish" id="btnReset">Alles löschen</button>
     <button class="act spacer" id="btnQuit">Programm beenden</button>
   </div>
+  <div class="codever" id="codeVer"></div>
 </div>
 
 <script>
@@ -1596,12 +1599,26 @@ window.pyReady = (async () => {
 
     const files = ["ledger.py", "tax.py", "okx_import.py", "market.py",
                     "webapi.py", "pdf_report.py", "schema.sql"];
+    // Sichtbarer Fingerabdruck der geladenen Dateien (Groesse + einfache
+    // Pruefsumme je Datei) - GitHub Pages liegt hinter einem CDN (Fastly),
+    // das Antworten auch dann noch aus dem Edge-Cache liefern kann, wenn der
+    // Browser selbst dank cache:"no-store" gar nicht mehr lokal cached.
+    // Ohne sichtbares Signal lässt sich "welcher Stand läuft wirklich" nur
+    // durch manuelles Rohdatei-Vergleichen klären (siehe PROJEKT-GEDAECHTNIS) -
+    // das hat in der Vergangenheit mehrere Chat-Runden gekostet. Jetzt reicht
+    // ein Blick unten in der App: Zahl aendert sich sichtbar nach jedem
+    // echten Datei-Update, bleibt gleich, wenn (trotz Neu-Upload) noch der
+    // alte Stand ausgeliefert wird.
+    const fileVersions = [];
     for (const f of files) {
-      // cache:"no-store" erzwingt jedes Mal einen frischen Abruf - sonst
-      // liefert Safari nach einem Update auf GitHub gerne noch die alte,
-      // im Cache liegende Version der .py-Dateien aus, ohne dass man das
-      // am Fehlerbild erkennen könnte.
-      const resp = await fetch("py/" + f, {cache: "no-store"});
+      // cache:"no-store" erzwingt beim Browser selbst jedes Mal einen
+      // frischen Abruf; der Zeitstempel in der URL zusaetzlich verhindert,
+      // dass eine zwischengeschaltete CDN-Kopie (z.B. Fastly bei GitHub
+      // Pages) unter derselben URL still eine aeltere Fassung ausliefert -
+      // sonst liefert Safari/das CDN nach einem Update auf GitHub gerne noch
+      // die alte Version der .py-Dateien aus, ohne dass man das am
+      // Fehlerbild erkennen könnte.
+      const resp = await fetch("py/" + f + "?v=" + Date.now(), {cache: "no-store"});
       if (!resp.ok) {
         throw new Error(
           `Datei "py/${f}" konnte nicht geladen werden (HTTP ${resp.status}). `+
@@ -1614,7 +1631,21 @@ window.pyReady = (async () => {
           `Datei "py/${f}" enthält HTML statt Python-Code - das Hosting liefert `+
           `dafür vermutlich eine Fehlerseite (404) statt der echten Datei aus.`);
       }
+      // Einfache (nicht-kryptografische) Pruefsumme reicht hier voellig - es
+      // geht nur darum, eine Aenderung sichtbar zu machen, nicht um Sicherheit.
+      let h = 0;
+      for (let i = 0; i < text.length; i++) { h = (h * 31 + text.charCodeAt(i)) >>> 0; }
+      fileVersions.push(`${f}:${text.length}:${h.toString(16)}`);
       pyodide.FS.writeFile("/" + f, text);
+    }
+    const verEl = document.getElementById("codeVer");
+    if (verEl) {
+      let vh = 0;
+      const joined = fileVersions.join("|");
+      for (let i = 0; i < joined.length; i++) { vh = (vh * 31 + joined.charCodeAt(i)) >>> 0; }
+      verEl.textContent = `Code-Stand ${vh.toString(16)} · geladen ${new Date().toLocaleTimeString("de-DE")}`;
+      verEl.title = fileVersions.join("\n");
+      verEl.onclick = () => alert(fileVersions.join("\n"));
     }
 
     // PDF-Export: reportlab hat seit Version 5 einen reinen Python-Wheel
