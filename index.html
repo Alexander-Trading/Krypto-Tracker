@@ -1257,7 +1257,7 @@ function render(){
 
   if(TAB==="dash"){
     p.innerHTML=dash();
-    // loadRecent() nicht mehr bei jedem 10s-Live-Refresh mitlaufen lassen -
+    // loadRecent() nicht mehr bei jedem 30s-Live-Refresh mitlaufen lassen -
     // reicht, wenn es beim Betreten des Tabs bzw. hoechstens alle 8s passiert.
     if(STATE.hasData && Date.now()-lastRecentLoadAt > 8000){
       lastRecentLoadAt = Date.now();
@@ -1273,19 +1273,32 @@ function render(){
 }
 
 // Positionen- UND Dashboard-Tab: Live-Kurs/Marge/uPnL haengen von OKX'
-// Marktdaten ab, die sich laufend aendern - alle 10s automatisch neu
+// Marktdaten ab, die sich laufend aendern - alle 30s automatisch neu
 // abrufen, solange einer der beiden Tabs offen ist. Kein Intervall auf
 // anderen Tabs, um nicht unnoetig CPU/Netzwerk zu verbrauchen (wichtig
 // gerade im Browser, wo pyfetch jeden Abruf ueber echte HTTP-Requests treibt).
 let posAutoRefreshTimer = null;
 let lastMarketAt = null;   // Diagnose: wann kam der letzte Live-Marktdaten-Refresh an
-let lastRecentLoadAt = 0;  // verhindert, dass loadRecent() jetzt bei jedem 10s-Tick mitlaeuft
+let lastRecentLoadAt = 0;  // verhindert, dass loadRecent() jetzt bei jedem 30s-Tick mitlaeuft
+
+// Pausiert das Live-Polling, wenn die Seite nicht sichtbar ist (App im
+// Hintergrund, Bildschirm gesperrt) - iOS wuerde den Timer ohnehin bald
+// selbst einfrieren, aber so wird gar nicht erst unnoetig etwas abgerufen,
+// sobald man wegnavigiert, und es startet sofort wieder beim Zurueckkommen.
+document.addEventListener("visibilitychange", () => {
+  if(document.hidden){
+    if(posAutoRefreshTimer){ clearInterval(posAutoRefreshTimer); posAutoRefreshTimer = null; }
+  } else {
+    managePosAutoRefresh();
+    if((TAB === "positions" || TAB === "dash") && (STATE.positions||[]).length) refreshMarket();
+  }
+});
 function managePosAutoRefresh(){
   if((TAB === "positions" || TAB === "dash") && (STATE.positions||[]).length){
     if(!posAutoRefreshTimer){
       posAutoRefreshTimer = setInterval(()=>{
         if(TAB === "positions" || TAB === "dash") refreshMarket();
-      }, 10000);
+      }, 30000);
     }
   } else if(posAutoRefreshTimer){
     clearInterval(posAutoRefreshTimer);
