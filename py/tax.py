@@ -75,6 +75,26 @@ def store_rate(conn, asset, day, price, source):
         (asset, day, L.dstr(price), source, L.now_utc()))
 
 
+# Eigene "Quelle" im selben price_cache-Table (PRIMARY KEY hat source mit
+# drin) fuer native Kontrakt-Kurse - keine Schema-Aenderung noetig, aber
+# eigene Abfragen, damit das nie mit einem gleichnamigen Asset kollidiert.
+_NATIVE_SOURCE = "okx-native"
+
+
+def cached_native_price(conn, inst_id, day):
+    row = conn.execute(
+        "SELECT eur_price FROM price_cache WHERE asset = ? AND day = ? AND source = ?",
+        (inst_id, day, _NATIVE_SOURCE)).fetchone()
+    return L.D(row["eur_price"]) if row else None
+
+
+def store_native_price(conn, inst_id, day, price):
+    conn.execute(
+        """INSERT OR REPLACE INTO price_cache (asset, day, eur_price, source, fetched_at)
+           VALUES (?, ?, ?, ?, ?)""",
+        (inst_id, day, L.dstr(price), _NATIVE_SOURCE, L.now_utc()))
+
+
 def rates_from_own_trades(conn):
     """Notloesung ohne Netz: Die eigenen Umtauschvorgaenge enthalten echte
     EUR-Kurse. Das deckt nur die Tage ab, an denen getauscht wurde - besser
@@ -569,23 +589,40 @@ def fees_summary(conn):
 
 # --- Kapitalkurve ------------------------------------------------------------
 
-async def capital_curve(conn, fetcher=None, points=24):
-    """Portfoliowert (Ledger-Bestand, ohne laufende Position live bewertet)
-    an bis zu `points` gleichmaessig verteilten Tagen zwischen erster und
-    letzter Buchung. Fuer die aktuell offene Position zaehlt hier nur der
-    gebuchte Margin-Wert, nicht das tagesaktuelle unrealisierte Ergebnis -
-    das kennt nur das Dashboard live per market.py. Eine Naeherung, aber die
-    einzige, die sich rein aus historischen Buchungen rekonstruieren laesst."""
+# Zeitraum-Filter fuer die Kapitalkurve, analog zu OKX' Chart-Buttons.
+# "all"/unbekannter Key -> komplette Historie (kein Eintrag hier noetig).
+RANGE_DAYS = {"7d": 7, "30d": 30, "90d": 90, "365d": 365}
+
+
+async def capital_curve(conn, fetcher=None, points=150, positions=None,
+                         instmap=None, price_fetcher=None, range_key=None):
+    """Portfoliowert an bis zu `points` gleichmaessig verteilten Tagen
+    zwischen Start des Zeitraums und heute.
+
+    Enthaelt jetzt auch das unrealisierte Ergebnis aktuell offener
+    Positionen: fuer jeden Tag ab Eroeffnung wird der historische
+    Kontrakt-Kurs von OKX geholt (oeffentlicher Endpunkt, wie bei den
+    EUR-Tageskursen) und die Differenz zum Einstiegspreis wie im Dashboard
+    oben in EUR umgerechnet und aufaddiert.
+
+    Naeherung: die HEUTIGE Positionsgroesse/der heutige Einstiegspreis wird
+    rueckwirkend auf den Kursverlauf angewendet - die tatsaechliche Historie
+    von Nachschuessen oder Teil-Glattstellungen ist unbekannt. Fehlt
+    `opened_at` (alte Imports vor dieser Aenderung), wird das unrealisierte
+    Ergebnis nur fuer den heutigen Punkt angesetzt, nicht rueckwirkend."""
     span = conn.execute("SELECT MIN(ts_utc), MAX(ts_utc) FROM transactions").fetchone()
     if not span[0]:
         return {"points": []}
 
     start = datetime.fromisoformat(day_of(span[0])).replace(tzinfo=timezone.utc)
     end = datetime.now(timezone.utc)
-    total_days = max(1, (end.date() - start.date()).days)
+    range_days = RANGE_DAYS.get(range_key)
+    start_bound = max(start, end - timedelta(days=range_days)) if range_days else start
+
+    total_days = max(1, (end.date() - start_bound.date()).days)
     step = max(1, total_days // max(1, points - 1))
     days = []
-    d = start
+    d = start_bound
     while d.date() <= end.date():
         days.append(d.date().isoformat())
         d += timedelta(days=step)
@@ -594,6 +631,47 @@ async def capital_curve(conn, fetcher=None, points=24):
 
     assets = [r[0] for r in conn.execute("SELECT DISTINCT asset FROM entries")]
     table, missing, sources = await build_rate_lookup(conn, assets, days, fetcher)
+
+    # Unrealisiertes Ergebnis offener Positionen, je Tag in EUR.
+    pos_by_day = {day: Decimal(0) for day in days}
+    missing_mark = 0
+    last_day = days[-1]
+    for p in (positions or []):
+        inst = p.get("instrument")
+        size = abs(L.D(p.get("size") or 0))
+        if not inst or size == 0 or not price_fetcher:
+            continue
+        avg = L.D(p.get("avg_entry") or 0)
+        ccy = p.get("settle_ccy") or "USDC"
+        direction = Decimal(1) if p.get("side") == "long" else Decimal(-1)
+        m = (instmap or {}).get(inst) or {}
+        inst_id = m.get("instId") or inst
+        opened_day = day_of(p["opened_at"]) if p.get("opened_at") else None
+
+        for day in days:
+            if opened_day:
+                if day < opened_day:
+                    continue
+            elif day != last_day:
+                # Eroeffnungsdatum unbekannt (Import von vor dieser Aenderung) -
+                # nur "heute" ansetzen, statt eine unbekannte Vergangenheit zu erfinden.
+                continue
+
+            mark = cached_native_price(conn, inst_id, day)
+            if mark is None:
+                try:
+                    fetched = await price_fetcher(inst_id, day)
+                except Exception:
+                    fetched = None
+                mark = L.D(fetched) if fetched is not None else None
+                if mark is not None:
+                    store_native_price(conn, inst_id, day, mark)
+            rate = table.get((ccy, day))
+            if mark is None or rate is None:
+                missing_mark += 1
+                continue
+            upnl_native = (mark - avg) * size * direction
+            pos_by_day[day] += upnl_native * rate
 
     out = []
     for day in days:
@@ -606,8 +684,9 @@ async def capital_curve(conn, fetcher=None, points=24):
                 complete = False
             else:
                 total += v
+        total += pos_by_day.get(day, Decimal(0))
         out.append({"day": day, "eur": total, "complete": complete})
-    return dec2str({"points": out, "missingRatesCount": len(missing)})
+    return dec2str({"points": out, "missingRatesCount": len(missing) + missing_mark})
 
 
 # --- CSV -------------------------------------------------------------------

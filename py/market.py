@@ -302,6 +302,27 @@ async def eur_rate_on(asset, day):
     return None
 
 
+async def historic_instrument_price(inst_id, day):
+    """Tagesschlusskurs eines Kontrakts (nativ, z.B. in USDC) von OKX'
+    oeffentlichem History-Candles-Endpunkt - kein API-Key, kein CORS-Problem,
+    dieselbe Quelle wie eur_rate_on(). Fuer die Kapitalkurve, um das
+    unrealisierte Ergebnis einer offenen Position rueckwirkend auf den
+    Kursverlauf anzuwenden. None, wenn der Kontrakt an dem Tag noch nicht
+    existierte, schon abgelaufen war, oder der Abruf fehlschlaegt."""
+    from datetime import datetime, timezone
+    start = datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
+    after = int((start.timestamp() + 86400) * 1000)
+    try:
+        data = await _get("/api/v5/market/history-candles", instId=inst_id,
+                          bar="1D", after=str(after), limit="1")
+    except MarketError:
+        return None
+    if not data:
+        return None
+    close = D(data[0][4])
+    return close if close != 0 else None
+
+
 # --- Gesamtbild ------------------------------------------------------------
 
 async def snapshot(position, inst_id=None, inst_type=None):

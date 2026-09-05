@@ -237,7 +237,12 @@ async def _route_get(path, query, conn):
         return rep
 
     if path == "/api/capital-curve":
-        return await TAX.capital_curve(conn, fetcher=MK.eur_rate_on)
+        positions = get_state(conn, "positions") or []
+        instmap = get_state(conn, "instmap") or {}
+        range_key = (q.get("range") or [None])[0]
+        return await TAX.capital_curve(
+            conn, fetcher=MK.eur_rate_on, positions=positions, instmap=instmap,
+            price_fetcher=MK.historic_instrument_price, range_key=range_key)
 
     if path == "/api/fees":
         return TAX.fees_summary(conn)

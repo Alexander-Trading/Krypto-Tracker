@@ -304,6 +304,7 @@ def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL, ct_val_map=None):
         fees = sum((L.D(r["Fee"]) for r in fut), Decimal(0))
         size = contracts * inst_ct_val
         latest = max(fut, key=lambda r: r["Time"])
+        earliest_open = min(opens, key=lambda r: r["Time"])
         base = inst.split("-")[0] if "-" in inst else inst
 
         out.append({
@@ -320,6 +321,12 @@ def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL, ct_val_map=None):
             "margin_balance": margin + funding,
             "settle_ccy": latest["Fee Unit"] or "USDC",
             "as_of": to_utc(latest["Time"], meta["tz_offset"]),
+            # Fruehester Buy/Sell-Zeitpunkt fuer dieses Instrument in der
+            # Datei - Naeherung fuer "seit wann offen" (kennt keine
+            # zwischenzeitliche vollstaendige Glattstellung). Die Kapitalkurve
+            # nutzt das, um das unrealisierte Ergebnis nur ab diesem Tag
+            # rueckwirkend anzusetzen, statt fuer die ganze Historie.
+            "opened_at": to_utc(earliest_open["Time"], meta["tz_offset"]),
         })
 
     return sorted(out, key=lambda p: p["instrument"])
