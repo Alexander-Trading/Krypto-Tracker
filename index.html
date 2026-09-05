@@ -16,7 +16,6 @@
   --a23:#3FBF8F; --a20:#5B93F5; --a22:#E0B44E; --neutral:#6B7484; --alert:#F0714F;
   --up:#3FBF8F; --down:#F0714F;
   --shadow:0 1px 2px rgba(0,0,0,.3), 0 12px 28px -16px rgba(0,0,0,.55);
-  --chart-fill:.30;
   --hero-grad:linear-gradient(160deg,#182430 0%,#12171F 55%);
 }
 :root[data-theme="light"]{
@@ -27,7 +26,6 @@
   --a23:#18B98A; --a20:#4A6CF0; --a22:#C98A1E; --neutral:#8E96A8; --alert:#E14A42;
   --up:#18B98A; --down:#E14A42;
   --shadow:0 1px 2px rgba(20,25,50,.04), 0 10px 24px -14px rgba(20,25,50,.14);
-  --chart-fill:.18;
   --hero-grad:linear-gradient(160deg,#FFFFFF 0%,#ECF0FB 65%);
 }
 :root{
@@ -73,25 +71,6 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .themetoggle button{border:none;background:none;padding:6px 11px;border-radius:99px;
   font-family:var(--sans);font-size:11.5px;font-weight:600;color:var(--faint);cursor:pointer}
 .themetoggle button.on{background:var(--raise);color:var(--fg)}
-
-/* Kapitalkurve */
-.rangesel{display:inline-flex}
-.rangesel button{padding:5px 9px;font-size:10.5px}
-.curvewrap{margin-top:14px;position:relative;cursor:crosshair}
-.curvesvg{width:100%;height:74px;display:block}
-.curvesvg path.line{fill:none;stroke:var(--a20);stroke-width:2.2;
-  stroke-linecap:round;stroke-linejoin:round}
-.curvesvg path.fill{fill:var(--a20);opacity:var(--chart-fill)}
-.curve-crosshair{position:absolute;top:0;width:1px;height:74px;background:var(--line-2);
-  pointer-events:none}
-.curve-crosshair i{position:absolute;left:-3.5px;width:7px;height:7px;border-radius:50%;
-  background:var(--a20);box-shadow:0 0 0 2px var(--panel)}
-.curve-tip{position:absolute;transform:translate(-50%,0);
-  background:var(--raise);border:1px solid var(--line-2);border-radius:8px;
-  padding:5px 9px;font-family:var(--mono);font-size:11.5px;white-space:nowrap;
-  pointer-events:none;box-shadow:var(--shadow);z-index:2}
-.curve-tip .d{color:var(--faint);font-size:9.5px;display:block;margin-bottom:1px;
-  letter-spacing:.03em}
 
 /* Pruefen-Tab (unklare Buchungen) */
 .rvrow{padding:14px 20px;border-top:1px solid var(--line);display:flex;flex-wrap:wrap;
@@ -438,9 +417,7 @@ const TXL = {deposit:"Einzahlung",withdrawal:"Auszahlung",transfer:"Umbuchung",
   fee:"Gebühr",earn_reward:"Earn-Gutschrift",adjustment:"Korrektur"};
 const ORDER = ["unknown","par23","par20","par22","neutral"];
 
-let STATE=null, MARKET=null, PF=null, TAXR=null, CURVE=null, FEES=null, TAB="dash", YEAR=null;
-let CURVE_RANGE = "all";
-const CURVE_RANGES = [["7d","1W"],["30d","1M"],["90d","3M"],["365d","1J"],["all","Alles"]];
+let STATE=null, MARKET=null, PF=null, TAXR=null, FEES=null, TAB="dash", YEAR=null;
 let TXQ={bucket:"",q:"",offset:0,limit:60}, TXD=null;
 
 /* ================= Theme ================= */
@@ -579,8 +556,6 @@ function dash(){
     </div>
   </div>`;
 
-  const curveCard = curveCardHtml();
-
   const latestY = (TAXR && TAXR.years && TAXR.years.length)
     ? TAXR.years[TAXR.years.length-1] : null;
   const realized = latestY ? N(latestY.par20.result) + N(latestY.par23.gain) : null;
@@ -632,114 +607,7 @@ function dash(){
       })()
     : "";
 
-  return hero + curveCard + tiles + fxNote + feesCard() + recentCard();
-}
-
-/* --- Kapitalkurve ------------------------------------------------------- */
-
-function curveSvg(points){
-  if(!points || points.length < 2) return "";
-  const vals = points.map(p=>N(p.eur));
-  const min = Math.min(...vals), max = Math.max(...vals);
-  const range = (max - min) || 1;
-  const W = 600, H = 74, pad = 4;
-  const stepX = W / (points.length - 1);
-  const pts = points.map((p,i) => {
-    const x = i * stepX;
-    const y = pad + (H - 2*pad) * (1 - (N(p.eur) - min) / range);
-    return [x, y];
-  });
-  const line = pts.map((p,i) => (i===0?"M":"L") + p[0].toFixed(1) + "," + p[1].toFixed(1)).join(" ");
-  const fill = line + ` L${W},${H} L0,${H} Z`;
-  return `<svg class="curvesvg" viewBox="0 0 ${W} ${H}" preserveAspectRatio="none">
-    <path class="fill" d="${fill}"></path>
-    <path class="line" d="${line}"></path></svg>`;
-}
-
-function curveRangeSelHtml(){
-  return `<div class="themetoggle rangesel" id="curveRangeSel" style="margin-bottom:12px">${
-    CURVE_RANGES.map(([k,l]) =>
-      `<button class="${CURVE_RANGE===k?"on":""}" data-range="${k}">${l}</button>`).join("")
-  }</div>`;
-}
-
-function curveCardHtml(){
-  if(!CURVE) return `<div class="card" style="margin-top:12px"><div class="pad">
-    <div class="tile-k">Kapitalkurve</div><div class="note" style="padding:6px 0 0">Lädt…</div></div></div>`;
-  const pts = CURVE.points || [];
-  if(pts.length < 2) return `<div class="card" style="margin-top:12px">
-    <div class="ch"><span class="ct">Kapitalkurve</span></div>
-    <div class="pad">${curveRangeSelHtml()}
-      <div class="note" style="padding:0 0 6px">Für diesen Zeitraum liegen noch keine
-        zwei Datenpunkte vor.</div>
-    </div></div>`;
-  return `<div class="card" style="margin-top:12px">
-    <div class="ch"><span class="ct">Kapitalkurve</span>
-      <span class="eyebrow">${day(pts[0].day)} – ${day(pts[pts.length-1].day)}</span></div>
-    <div class="pad">
-      ${curveRangeSelHtml()}
-      <div class="curvewrap" id="curveWrap">${curveSvg(pts)}
-        <div class="curve-crosshair hidden" id="curveCrosshair"><i></i></div>
-        <div class="curve-tip hidden" id="curveTip"></div>
-      </div>
-      <div class="tile-s" style="margin-top:6px">Inkl. unrealisiertem Ergebnis offener
-        Positionen, mit der tatsächlichen Positionsgröße zum jeweiligen Tag (nicht der
-        heutigen Endgröße rückwirkend).${
-          CURVE.missingRatesCount ? ` Für ${CURVE.missingRatesCount} Tag/Kurs-Kombinationen fehlte ein Wert.` : ""
-        }</div>
-    </div></div>`;
-}
-
-function wireCurveRange(){
-  const sel = $("#curveRangeSel");
-  if(!sel) return;
-  sel.querySelectorAll("button").forEach(b => b.onclick = async () => {
-    if(b.dataset.range === CURVE_RANGE) return;
-    CURVE_RANGE = b.dataset.range;
-    sel.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
-    const wrap = $("#curveWrap");
-    if(wrap) wrap.style.opacity = "0.4";
-    try{ CURVE = await api("/api/capital-curve?range=" + CURVE_RANGE); }
-    catch(e){ CURVE = null; }
-    if(TAB === "dash") render();
-  });
-}
-
-function wireCurve(){
-  const wrap = $("#curveWrap");
-  if(!wrap || !CURVE || !CURVE.points || CURVE.points.length < 2) return;
-  const pts = CURVE.points;
-  const vals = pts.map(p => N(p.eur));
-  const min = Math.min(...vals), max = Math.max(...vals);
-  const range = (max - min) || 1;
-  const H = 74, pad = 4;
-  const cross = $("#curveCrosshair"), tip = $("#curveTip");
-  const svgEl = wrap.querySelector("svg");
-  if(!svgEl) return;
-
-  function show(clientX){
-    const rect = svgEl.getBoundingClientRect();
-    if(!rect.width) return;
-    let rel = (clientX - rect.left) / rect.width;
-    rel = Math.min(1, Math.max(0, rel));
-    const idx = Math.round(rel * (pts.length - 1));
-    const p = pts[idx];
-    const xPct = (idx / (pts.length - 1)) * 100;
-    const yPx = pad + (H - 2*pad) * (1 - (N(p.eur) - min) / range);
-    cross.style.left = xPct + "%";
-    cross.querySelector("i").style.top = (yPx - 3.5) + "px";
-    cross.classList.remove("hidden");
-    tip.style.left = xPct + "%";
-    tip.style.top = "0px";
-    tip.innerHTML = `<span class="d">${day(p.day)}</span>${eur(p.eur)}`;
-    tip.classList.remove("hidden");
-  }
-  function hide(){ cross.classList.add("hidden"); tip.classList.add("hidden"); }
-
-  wrap.onmousemove = e => show(e.clientX);
-  wrap.onmouseleave = hide;
-  wrap.ontouchstart = wrap.ontouchmove = e => { if(e.touches[0]){ e.preventDefault(); show(e.touches[0].clientX); } };
-  wrap.ontouchend = hide;
+  return hero + tiles + fxNote + feesCard() + recentCard();
 }
 
 /* --- Gebühren & Funding --------------------------------------------------- */
@@ -1367,7 +1235,7 @@ async function handleFile(f){
   try{
     const r=await api("/api/import",{name:f.name,text:await f.text()});
     STATE=r.state; showImport(r,f.name);
-    PF=null; TAXR=null; CURVE=null; FEES=null;
+    PF=null; TAXR=null; FEES=null;
     await refreshDerived();
     if((STATE.positions||[]).length) await refreshMarket();
   }catch(e){
@@ -1386,7 +1254,7 @@ function render(){
   updateReviewBadge();
   const p=$("#panel");
 
-  if(TAB==="dash"){ p.innerHTML=dash(); if(STATE.hasData) loadRecent(); wireCurve(); wireCurveRange(); }
+  if(TAB==="dash"){ p.innerHTML=dash(); if(STATE.hasData) loadRecent(); }
   else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); }
   else if(TAB==="tx"){ p.innerHTML=txPanel(); wireTx(); loadTx(false); }
   else if(TAB==="review"){ p.innerHTML=reviewPanel(); loadReview(); }
@@ -1533,7 +1401,7 @@ function wireTxForm(){
         note: $("#tf-note").value.trim() || null,
         entries,
       });
-      STATE = r.state; TXFORM_OPEN = false; PF=TAXR=CURVE=FEES=null;
+      STATE = r.state; TXFORM_OPEN = false; PF=TAXR=FEES=null;
       TXQ.offset = 0; TXD = null;
       render(); loadTx(false); refreshDerived();
     }catch(e){
@@ -1548,7 +1416,7 @@ function wireTxDelete(){
     if(!confirm("Diese manuell angelegte Buchung löschen?")) return;
     try{
       const r = await api("/api/tx-delete", {id: +b.dataset.id});
-      STATE = r.state; PF=TAXR=CURVE=FEES=null;
+      STATE = r.state; PF=TAXR=FEES=null;
       TXD = null; loadTx(false); refreshDerived();
     }catch(e){
       alert("Löschen fehlgeschlagen: " + (e.message||e));
@@ -1604,7 +1472,6 @@ async function refreshMarket(){
 async function refreshDerived(){
   try{ PF=await api("/api/portfolio"); }catch(e){ PF=null; }
   try{ TAXR=await api("/api/tax"); }catch(e){ TAXR=null; }
-  try{ CURVE=await api("/api/capital-curve?range="+CURVE_RANGE); }catch(e){ CURVE=null; }
   try{ FEES=await api("/api/fees"); }catch(e){ FEES=null; }
   if(TAB==="dash"||TAB==="tax") render();
 }
@@ -1671,7 +1538,7 @@ $("#dbFile").onchange=async(e)=>{
 
 $("#btnReset").onclick=async()=>{
   if(!confirm("Alle Vorgänge löschen?")) return;
-  STATE=await api("/api/reset",{}); MARKET=PF=TAXR=CURVE=FEES=TXD=null; render();};
+  STATE=await api("/api/reset",{}); MARKET=PF=TAXR=FEES=TXD=null; render();};
 $("#btnQuit").onclick=async()=>{
   if(!confirm("Wirklich schließen? Deine Daten bleiben im Browser gespeichert.")) return;
   try{ await window.pySync(); }catch(e){}
