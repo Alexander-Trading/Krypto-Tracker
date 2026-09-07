@@ -140,6 +140,13 @@ FUNDING_MAP = {
     "from unified trading account": ("transfer", "neutral"),
     "transfer in":                ("transfer", "neutral"),
     "transfer out":               ("transfer", "neutral"),
+    # "Received" ist OKX' Sammelbegriff fuer Gutschriften ohne eigene
+    # Gegenleistung: Cashback, Prämien, Referral-Boni, Airdrops. Best-guess-
+    # Einordnung als sonstige Einkuenfte (§22 Nr. 3) - wie bei allen
+    # Steuertopf-Zuordnungen in diesem Tool keine gesicherte Rechtslage,
+    # siehe Hinweis auf dem Report-Deckblatt. Bei Bedarf im "Prüfen"-Tab auf
+    # einen anderen Topf umbuchen.
+    "received":                   ("earn_reward", "par22"),
 }
 
 
