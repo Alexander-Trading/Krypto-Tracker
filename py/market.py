@@ -92,10 +92,24 @@ def _get_urllib(url):
 
 
 async def _get_pyodide(url):
+    import asyncio
     import pyodide.http
     try:
-        resp = await pyodide.http.pyfetch(
-            url, headers={"User-Agent": "tracker/0.1"})
+        # asyncio.wait_for ist hier keine Kosmetik: pyfetch() selbst hat KEIN
+        # eingebautes Timeout. Haengt eine Anfrage (z.B. Netzwerkwechsel
+        # WLAN/Mobilfunk auf dem iPhone, oder OKX antwortet einfach nicht),
+        # wuerde ohne diese Grenze der komplette dispatch()-Aufruf fuer immer
+        # haengen bleiben - und mit ihm der globale DB-Lock in webapi.py, was
+        # JEDE andere Anfrage (Steuer, Prüfen, sogar "Alles löschen") ebenso
+        # fuer immer blockiert, weil sie alle hinter demselben Lock warten.
+        resp = await asyncio.wait_for(
+            pyodide.http.pyfetch(url, headers={"User-Agent": "tracker/0.1"}),
+            timeout=TIMEOUT)
+    except asyncio.TimeoutError:
+        raise MarketError(
+            f"Zeitüberschreitung beim Abruf von OKX ({TIMEOUT}s). "
+            "Vermutlich ein Netzwerkproblem gerade eben - einfach nochmal "
+            "versuchen.") from None
     except Exception as exc:
         # Kommt hierher, wenn schon die Anfrage selbst scheitert - typischerweise
         # ein CORS-Block durch OKX, nicht durch uns.
@@ -106,7 +120,9 @@ async def _get_pyodide(url):
     if not resp.ok:
         raise MarketError(f"HTTP {resp.status} bei {url}")
     try:
-        return await resp.json()
+        return await asyncio.wait_for(resp.json(), timeout=TIMEOUT)
+    except asyncio.TimeoutError:
+        raise MarketError("Zeitüberschreitung beim Lesen der OKX-Antwort.") from None
     except Exception as exc:
         raise MarketError(f"Antwort von OKX nicht lesbar: {exc}") from None
 

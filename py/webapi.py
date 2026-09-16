@@ -400,7 +400,20 @@ async def dispatch(method, path_with_query, body_json):
     else:
         path, query = path_with_query, ""
 
-    async with _db_lock:
+    # Zweite Sicherung neben dem Timeout in market.py: selbst wenn IRGENDWO
+    # ein Aufruf haengen bleibt (auch an einer Stelle, die wir noch nicht
+    # kennen), soll das nicht die komplette App fuer immer blockieren, nur
+    # weil jede Anfrage denselben Lock teilt. Nach 20s lieber eine klare
+    # Fehlermeldung als ein endloses "Lädt...".
+    try:
+        await asyncio.wait_for(_db_lock.acquire(), timeout=20)
+    except asyncio.TimeoutError:
+        return _dump({"__error__":
+            "Die App wartet noch auf eine vorherige Anfrage, die ungewöhnlich "
+            "lange braucht (vermutlich ein hängender Netzwerkabruf). Seite "
+            "einmal neu laden, falls das bestehen bleibt."})
+
+    try:
         conn = _connect()
         try:
             if method == "GET":
@@ -413,3 +426,5 @@ async def dispatch(method, path_with_query, body_json):
             return _dump({"__error__": str(exc)})
         finally:
             conn.close()
+    finally:
+        _db_lock.release()
