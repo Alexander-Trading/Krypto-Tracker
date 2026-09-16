@@ -1138,8 +1138,10 @@ function txPanel(){
 }
 
 function txFormHtml(){
-  const accOpts = ["funding","trading","earn"]
-    .map(a=>`<option value="${a}">${a==="funding"?"Funding":a==="trading"?"Trading":"Earn"}</option>`).join("");
+  const accOpts = ["funding","trading","earn","wallet"]
+    .map(a=>`<option value="${a}">${
+      a==="funding"?"Funding":a==="trading"?"Trading":a==="earn"?"Earn":"Wallet (extern)"
+    }</option>`).join("");
   const typeOpts = Object.entries(TXL)
     .map(([k,l])=>`<option value="${k}">${esc(l)}</option>`).join("");
   const bucketOpts = ORDER.map(k=>`<option value="${k}">${esc(B[k].s)}</option>`).join("");
@@ -1198,22 +1200,39 @@ async function loadTx(append){
 /* ================= Import ================= */
 
 const KIND={funding:"Funding History",trading:"Trading History",
-  deposit:"Krypto-Einzahlungen",leer:"ohne Datenzeilen"};
+  deposit:"Krypto-Einzahlungen",leer:"ohne Datenzeilen",manual_lots:"Externe Bestände"};
 
 function importPanel(){
   const runs=(STATE.imports||[]).map(r=>{
     let n={}; try{n=JSON.parse(r.note||"{}")}catch(e){}
     return `<div class="row"><div class="when">${dtm(r.started_at)}</div>
       <div class="what"><div class="title">${esc(r.filename)}</div>
-      <div class="note-s">${esc(KIND[n.kind]||n.kind||"")} · Zeitzone ${esc(n.tz||"?")}</div></div>
+      <div class="note-s">${esc(KIND[n.kind]||n.kind||"")}${n.tz?` · Zeitzone ${esc(n.tz)}`:""}</div></div>
       <div class="amt"><i>${r.rows_imported} / ${r.rows_read}</i></div></div>`;}).join("");
+
+  const templateCsv = "Datum,Asset,Menge,EUR-Kosten,Herkunft\n"
+    + "2022-03-15,BTC,0.05,1850.00,Kraken\n"
+    + "2023-07-01,ETH,1.2,2200.00,Binance\n";
+  const templateHref = "data:text/csv;charset=utf-8," + encodeURIComponent(templateCsv);
+
   return `<div class="drop" id="drop" tabindex="0" role="button">
       <div class="drop-t">CSV hierher ziehen</div>
       <div class="drop-h">Funding History und Trading History aus dem OKX Order Center.
         Dieselbe Datei zweimal einzulesen ändert nichts.</div></div>
     <input type="file" id="file" accept=".csv,.txt,text/csv" class="hidden">
     <div id="impResult"></div>
-    ${runs?`<div class="sect">Bisherige Importe</div><div class="card">${runs}</div>`:""}`;
+    ${runs?`<div class="sect">Bisherige Importe</div><div class="card">${runs}</div>`:""}
+
+    <div class="sect">Externe Bestände (z.B. Hardware-Wallet)</div>
+    <div class="drop" id="dropLots" tabindex="0" role="button">
+      <div class="drop-t">Bestands-CSV hierher ziehen</div>
+      <div class="drop-h">Für Krypto, das nicht über OKX läuft (z.B. Trezor). Eine Zeile je
+        einzelnem Kauf, mit dem echten ursprünglichen Kaufdatum/-preis - nicht dem Datum des
+        Transfers auf die Wallet. Spalten: Datum (JJJJ-MM-TT), Asset, Menge, EUR-Kosten,
+        Herkunft (optional, z.B. "Kraken"). <a href="${templateHref}"
+        download="bestand-vorlage.csv" onclick="event.stopPropagation()">Vorlage herunterladen</a></div></div>
+    <input type="file" id="fileLots" accept=".csv,.txt,text/csv" class="hidden">
+    <div id="impLotsResult"></div>`;
 }
 
 function showImport(r,name){
@@ -1246,6 +1265,34 @@ async function handleFile(f){
     $("#impResult").innerHTML=`<div class="card" style="margin-top:12px">
       <div class="warn"><b>Das hat nicht geklappt</b>${esc(e.message||e)}</div></div>`;
   }
+}
+
+async function handleManualLotsFile(f){
+  $("#impLotsResult").innerHTML=`<div class="card" style="margin-top:12px">
+    <div class="kv">Lese ${esc(f.name)} …</div></div>`;
+  try{
+    const r=await api("/api/import-manual-lots",{name:f.name,text:await f.text()});
+    STATE=r.state; showManualLotsImport(r,f.name);
+    PF=null; TAXR=null; FEES=null;
+    await refreshDerived();
+  }catch(e){
+    $("#impLotsResult").innerHTML=`<div class="card" style="margin-top:12px">
+      <div class="warn"><b>Das hat nicht geklappt</b>${esc(e.message||e)}</div></div>`;
+  }
+}
+
+function showManualLotsImport(r,name){
+  if(r.duplicate){
+    $("#impLotsResult").innerHTML=`<div class="card" style="margin-top:12px">
+      <div class="warn"><b>Schon importiert</b>${esc((r.warnings||[])[0]||"")}</div></div>`;
+    return;
+  }
+  const warn=(r.warnings||[]).map(w=>`<div class="warn" style="margin-top:8px">${esc(w)}</div>`).join("");
+  $("#impLotsResult").innerHTML=`<div class="card" style="margin-top:12px"><div class="kv">
+    <span>Datei <b>${esc(name)}</b></span>
+    <span>Gelesen <b>${r.rowsRead}</b></span>
+    <span>Neu <b>${r.imported}</b></span>
+    ${r.skipped?`<span>Bekannt <b>${r.skipped}</b></span>`:""}</div>${warn}</div>`;
 }
 
 /* ================= Rahmen ================= */
@@ -1475,6 +1522,15 @@ function wireDrop(){
   d.ondrop=e=>{e.preventDefault();d.classList.remove("over");
     if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);};
   $("#file").onchange=e=>{if(e.target.files[0]) handleFile(e.target.files[0]);};
+
+  const dl=$("#dropLots");
+  dl.onclick=e=>{ if(e.target.tagName!=="A") $("#fileLots").click(); };
+  dl.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();$("#fileLots").click();}};
+  dl.ondragover=e=>{e.preventDefault();dl.classList.add("over");};
+  dl.ondragleave=()=>dl.classList.remove("over");
+  dl.ondrop=e=>{e.preventDefault();dl.classList.remove("over");
+    if(e.dataTransfer.files[0]) handleManualLotsFile(e.dataTransfer.files[0]);};
+  $("#fileLots").onchange=e=>{if(e.target.files[0]) handleManualLotsFile(e.target.files[0]);};
 }
 
 function go(tab){TAB=tab;render();}
