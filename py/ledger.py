@@ -240,6 +240,14 @@ def balances(conn, account=None, until=None) -> dict:
     if until:
         sql += " AND t.ts_utc <= ?"
         params.append(until)
+    # Der Account 'wallet' (externe Cold-Storage-Wallets wie Trezor) haelt nie
+    # echtes EUR - eine dort gebuchte EUR-Gegenbuchung ist nur die
+    # synthetische Kostenbasis eines manuell erfassten Kaufs (siehe
+    # rates_from_own_trades() in tax.py), fuer die FIFO-Berechnung gedacht,
+    # kein tatsaechlich vorhandenes Geld. Sie muss aus dem Bestand
+    # ausgeklammert bleiben, sonst hebt sie den Wert des neu hinzugekommenen
+    # Krypto-Bestands im Portfolio fast vollstaendig wieder auf.
+    sql += " AND NOT (t.account = 'wallet' AND e.asset = 'EUR')"
 
     out = {}
     for row in conn.execute(sql, params):
