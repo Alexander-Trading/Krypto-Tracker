@@ -660,9 +660,16 @@ function recentCard(){
 
 async function loadRecent(){
   const el = $("#recent"); if(!el) return;
-  const d = await api("/api/transactions?limit=5");
-  el.innerHTML = d.items.map(rowHtml).join("") +
-    `<div class="more"><button class="act" onclick="go('tx')">Alle ${d.total} ansehen</button></div>`;
+  try{
+    const d = await api("/api/transactions?limit=5");
+    RECENT_ERROR = null;
+    el.innerHTML = d.items.map(rowHtml).join("") +
+      `<div class="more"><button class="act" onclick="go('tx')">Alle ${d.total} ansehen</button></div>`;
+  }catch(e){
+    RECENT_ERROR = String(e.message||e);
+    el.innerHTML = `<div class="empty"><h3>Das hat nicht geklappt</h3><p>${esc(RECENT_ERROR)}</p>
+      <button class="act" onclick="loadRecent()">Erneut versuchen</button></div>`;
+  }
 }
 
 /* ================= Positionen ================= */
@@ -767,7 +774,14 @@ function reviewPanel(){
 
 async function loadReview(){
   const el = $("#reviewCard"); if(!el) return;
-  REVIEWD = await api("/api/transactions?bucket=unknown&limit=200");
+  try{
+    REVIEWD = await api("/api/transactions?bucket=unknown&limit=200");
+  }catch(e){
+    el.outerHTML = `<div class="card"><div class="empty"><h3>Das hat nicht geklappt</h3>
+      <p>${esc(String(e.message||e))}</p>
+      <button class="act" onclick="go('review')">Erneut versuchen</button></div></div>`;
+    return;
+  }
   if(!REVIEWD.items.length){
     el.outerHTML = `<div class="card"><div class="empty">
       <h3>Nichts zu prüfen</h3><p>Aktuell ist jede Buchung einem Steuertopf zugeordnet.</p></div></div>`;
@@ -834,7 +848,11 @@ function updateReviewBadge(){
 /* ================= Steuer ================= */
 
 function taxPanel(){
-  if(!TAXR) return `<div class="card"><div class="empty"><p>Berechne…</p></div></div>`;
+  if(!TAXR) return TAXR_ERROR
+    ? `<div class="card"><div class="empty"><h3>Das hat nicht geklappt</h3>
+        <p>${esc(TAXR_ERROR)}</p>
+        <button class="act" onclick="refreshDerived()">Erneut versuchen</button></div></div>`
+    : `<div class="card"><div class="empty"><p>Berechne…</p></div></div>`;
   if(!TAXR.years.length) return `<div class="card"><div class="empty">
     <h3>Nichts zu berechnen</h3><p>Es sind noch keine Vorgänge erfasst.</p></div></div>`;
 
@@ -1523,14 +1541,19 @@ function wireDrop(){
     if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);};
   $("#file").onchange=e=>{if(e.target.files[0]) handleFile(e.target.files[0]);};
 
-  const dl=$("#dropLots");
-  dl.onclick=e=>{ if(e.target.tagName!=="A") $("#fileLots").click(); };
-  dl.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();$("#fileLots").click();}};
-  dl.ondragover=e=>{e.preventDefault();dl.classList.add("over");};
-  dl.ondragleave=()=>dl.classList.remove("over");
-  dl.ondrop=e=>{e.preventDefault();dl.classList.remove("over");
-    if(e.dataTransfer.files[0]) handleManualLotsFile(e.dataTransfer.files[0]);};
-  $("#fileLots").onchange=e=>{if(e.target.files[0]) handleManualLotsFile(e.target.files[0]);};
+  // Eigener try/catch: falls dieser zweite Bereich aus irgendeinem Grund
+  // fehlt (z.B. inkonsistenter Zwischenstand beim Datei-Update), darf das
+  // nicht die Verkabelung des ORIGINALEN CSV-Uploads oben mitreissen.
+  try{
+    const dl=$("#dropLots");
+    dl.onclick=e=>{ if(e.target.tagName!=="A") $("#fileLots").click(); };
+    dl.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();$("#fileLots").click();}};
+    dl.ondragover=e=>{e.preventDefault();dl.classList.add("over");};
+    dl.ondragleave=()=>dl.classList.remove("over");
+    dl.ondrop=e=>{e.preventDefault();dl.classList.remove("over");
+      if(e.dataTransfer.files[0]) handleManualLotsFile(e.dataTransfer.files[0]);};
+    $("#fileLots").onchange=e=>{if(e.target.files[0]) handleManualLotsFile(e.target.files[0]);};
+  }catch(e){ console.error("dropLots-Verkabelung fehlgeschlagen:", e); }
 }
 
 function go(tab){TAB=tab;render();}
@@ -1553,9 +1576,12 @@ async function refreshMarket(){
   catch(e){ MARKET=[{errors:[String(e.message||e)]}]; }
   if(TAB==="positions"||TAB==="dash") render();
 }
+let TAXR_ERROR = null, REVIEW_ERROR = null, RECENT_ERROR = null;
+
 async function refreshDerived(){
   try{ PF=await api("/api/portfolio"); }catch(e){ PF=null; }
-  try{ TAXR=await api("/api/tax"); }catch(e){ TAXR=null; }
+  try{ TAXR=await api("/api/tax"); TAXR_ERROR=null; }
+  catch(e){ TAXR=null; TAXR_ERROR=String(e.message||e); }
   try{ FEES=await api("/api/fees"); }catch(e){ FEES=null; }
   if(TAB==="dash"||TAB==="tax") render();
 }
