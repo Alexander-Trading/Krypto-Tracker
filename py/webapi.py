@@ -308,6 +308,17 @@ async def _route_post(path, body, conn):
         result["state"] = build_state(conn)
         return result
 
+    if path == "/api/import-manual-lots":
+        name = (body.get("name") or "bestand.csv").replace("/", "_")
+        import tempfile
+        from pathlib import Path
+        with tempfile.TemporaryDirectory() as tmp:
+            fp = Path(tmp) / name
+            fp.write_text(body.get("text") or "", encoding="utf-8")
+            result = IMP.import_manual_lots_file(conn, fp, source="manual_lots_csv")
+        result["state"] = build_state(conn)
+        return result
+
     if path == "/api/demo":
         seed_demo(conn)
         return build_state(conn)

@@ -25,7 +25,7 @@ SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # --- Vokabular -------------------------------------------------------------
 
-ACCOUNTS = {"funding", "trading", "earn"}
+ACCOUNTS = {"funding", "trading", "earn", "wallet"}
 
 TX_TYPES = {
     "deposit",          # Fiat oder Krypto von aussen rein
