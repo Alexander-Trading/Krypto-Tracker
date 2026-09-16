@@ -1566,7 +1566,12 @@ $("#dbFile").onchange=async(e)=>{
 
 $("#btnReset").onclick=async()=>{
   if(!confirm("Alle Vorgänge löschen?")) return;
-  STATE=await api("/api/reset",{}); MARKET=PF=TAXR=FEES=TXD=null; render();};
+  try{
+    STATE=await api("/api/reset",{}); MARKET=PF=TAXR=FEES=TXD=null; render();
+  }catch(e){
+    alert("Löschen fehlgeschlagen: "+(e.message||e));
+  }
+};
 $("#btnQuit").onclick=async()=>{
   if(!confirm("Wirklich schließen? Deine Daten bleiben im Browser gespeichert.")) return;
   try{ await window.pySync(); }catch(e){}
