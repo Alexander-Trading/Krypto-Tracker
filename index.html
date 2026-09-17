@@ -660,9 +660,15 @@ function recentCard(){
 
 async function loadRecent(){
   const el = $("#recent"); if(!el) return;
-  const d = await api("/api/transactions?limit=5");
-  el.innerHTML = d.items.map(rowHtml).join("") +
-    `<div class="more"><button class="act" onclick="go('tx')">Alle ${d.total} ansehen</button></div>`;
+  try{
+    const d = await api("/api/transactions?limit=5");
+    el.innerHTML = d.items.map(rowHtml).join("") +
+      `<div class="more"><button class="act" onclick="go('tx')">Alle ${d.total} ansehen</button></div>`;
+  }catch(e){
+    el.innerHTML = `<div class="empty"><h3>Das hat nicht geklappt</h3>
+      <p>${esc(String(e.message||e))}</p>
+      <button class="act" onclick="loadRecent()">Erneut versuchen</button></div>`;
+  }
 }
 
 /* ================= Positionen ================= */
@@ -767,7 +773,14 @@ function reviewPanel(){
 
 async function loadReview(){
   const el = $("#reviewCard"); if(!el) return;
-  REVIEWD = await api("/api/transactions?bucket=unknown&limit=200");
+  try{
+    REVIEWD = await api("/api/transactions?bucket=unknown&limit=200");
+  }catch(e){
+    el.outerHTML = `<div class="card"><div class="empty"><h3>Das hat nicht geklappt</h3>
+      <p>${esc(String(e.message||e))}</p>
+      <button class="act" onclick="go('review')">Erneut versuchen</button></div></div>`;
+    return;
+  }
   if(!REVIEWD.items.length){
     el.outerHTML = `<div class="card"><div class="empty">
       <h3>Nichts zu prüfen</h3><p>Aktuell ist jede Buchung einem Steuertopf zugeordnet.</p></div></div>`;
@@ -1182,9 +1195,17 @@ async function loadTx(append){
   const p=new URLSearchParams({limit:TXQ.limit,offset:TXQ.offset});
   if(TXQ.bucket) p.set("bucket",TXQ.bucket);
   if(TXQ.q) p.set("q",TXQ.q);
-  const d=await api("/api/transactions?"+p);
-  TXD = append&&TXD ? {...d, items:TXD.items.concat(d.items)} : d;
   const el=$("#txList"); if(!el) return;
+  let d;
+  try{
+    d=await api("/api/transactions?"+p);
+  }catch(e){
+    el.innerHTML = `<div class="empty"><h3>Das hat nicht geklappt</h3>
+      <p>${esc(String(e.message||e))}</p>
+      <button class="act" onclick="loadTx(false)">Erneut versuchen</button></div>`;
+    return;
+  }
+  TXD = append&&TXD ? {...d, items:TXD.items.concat(d.items)} : d;
   el.innerHTML = TXD.items.length
     ? TXD.items.map(t=>rowHtml(t,{editable:true})).join("") + (TXD.items.length<TXD.total
         ? `<div class="more"><button class="act" id="txMore">Weitere laden (${
@@ -1242,6 +1263,13 @@ async function handleFile(f){
     PF=null; TAXR=null; FEES=null;
     await refreshDerived();
     if((STATE.positions||[]).length) await refreshMarket();
+    // Automatische Nachfrage statt nur eines leicht zu uebersehenden Buttons -
+    // nur wenn wirklich neue Buchungen dazugekommen sind (bei einem reinen
+    // Duplikat-Import hat sich nichts geaendert, das muss nicht gesichert werden).
+    if(r.imported > 0 && confirm(
+        `${r.imported} neue Buchung(en) importiert. Datenbank jetzt sichern?`)){
+      exportDb();
+    }
   }catch(e){
     $("#impResult").innerHTML=`<div class="card" style="margin-top:12px">
       <div class="warn"><b>Das hat nicht geklappt</b>${esc(e.message||e)}</div></div>`;
