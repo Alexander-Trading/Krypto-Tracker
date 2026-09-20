@@ -370,6 +370,25 @@ async def _route_post(path, body, conn):
         set_state(conn, "instmap", instmap)
         return {"ok": True, "instmap": instmap}
 
+    if path == "/api/pos-margin-adjust":
+        # Manuelles Nachschiessen/Abziehen von Margin direkt in OKX taucht in
+        # der Trading-History-CSV nirgends auf (kein Trade, keine Gebuehr,
+        # keine PnL-Zeile) - der Import kann das also grundsaetzlich nicht
+        # sehen. Deshalb hier ein von Hand gepflegter Korrekturwert je
+        # Position, der zur importierten margin_balance addiert wird.
+        positions = get_state(conn, "positions") or []
+        inst = body.get("instrument")
+        found = False
+        for pos in positions:
+            if pos.get("instrument") == inst:
+                pos["manual_margin_adjust"] = str(L.D(body.get("amount") or 0))
+                found = True
+                break
+        if not found:
+            return {"__error__": f"Position {inst} nicht gefunden."}
+        set_state(conn, "positions", positions)
+        return {"ok": True, "positions": positions}
+
     return {"__error__": "Nicht gefunden", "__status__": 404}
 
 
