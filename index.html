@@ -721,7 +721,7 @@ function posCard(p, mk){
     <span>Manuelle Margin-Korrektur${manualAdj!==0?": "+sgn(manualAdj)+" "+esc(ccy):""}
       ${manualAdj!==0?" (Nachschuss/Entnahme, die OKX-Exporte nicht erfassen)":""}</span>
     <button class="act" style="padding:4px 10px;font-size:12px"
-      onclick="adjustMargin(${JSON.stringify(p.instrument)},${JSON.stringify(String(manualAdj))})"
+      data-margin-adjust="${esc(p.instrument)}" data-margin-current="${esc(String(manualAdj))}"
       >${manualAdj!==0?"Ändern":"Margin nachtragen"}</button></div>`;
 
   const single = live && mk.liquidationPrice ? N(mk.liquidationPrice) : null;
@@ -759,27 +759,30 @@ function posCard(p, mk){
     </div><div class="stats">${stats}</div>${marginAdjBtn}${liqB}${errs}${picker}</div>`;
 }
 
-async function adjustMargin(instrument, current){
-  const v = prompt(
-    "Manuelle Margin-Korrektur für "+instrument+"\n\n"+
-    "Trage hier ein, wie viel du zusätzlich zur importierten Margin "+
-    "manuell nachgeschossen (positiv) oder entnommen (negativ) hast - "+
-    "das taucht in der OKX-CSV nicht auf, wird hier aber addiert.\n\n"+
-    "Bisheriger Korrekturwert:", current||"0");
-  if(v===null) return;
-  const amount = v.trim().replace(",",".");
-  if(amount!=="" && isNaN(Number(amount))){
-    alert("Das ist keine gültige Zahl."); return;
-  }
-  try{
-    await api("/api/pos-margin-adjust",{instrument, amount: amount||"0"});
-    STATE = await api("/api/state");
-    render();
-  }catch(e){
-    alert("Das hat nicht geklappt: "+(e.message||e));
-  }
+function wireMarginAdjust(){
+  document.querySelectorAll("[data-margin-adjust]").forEach(b=>b.onclick=async()=>{
+    const instrument = b.dataset.marginAdjust;
+    const current = b.dataset.marginCurrent||"0";
+    const v = prompt(
+      "Manuelle Margin-Korrektur für "+instrument+"\n\n"+
+      "Trage hier ein, wie viel du zusätzlich zur importierten Margin "+
+      "manuell nachgeschossen (positiv) oder entnommen (negativ) hast - "+
+      "das taucht in der OKX-CSV nicht auf, wird hier aber addiert.\n\n"+
+      "Bisheriger Korrekturwert:", current);
+    if(v===null) return;
+    const amount = v.trim().replace(",",".");
+    if(amount!=="" && isNaN(Number(amount))){
+      alert("Das ist keine gültige Zahl."); return;
+    }
+    try{
+      await api("/api/pos-margin-adjust",{instrument, amount: amount||"0"});
+      STATE = await api("/api/state");
+      render();
+    }catch(e){
+      alert("Das hat nicht geklappt: "+(e.message||e));
+    }
+  });
 }
-window.adjustMargin = adjustMargin;
 
 function pickerHtml(p, cands){
   return `<div class="liq"><div class="tile-k">Kontrakt zuordnen</div>
@@ -1341,7 +1344,7 @@ function render(){
       loadRecent();
     }
   }
-  else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); }
+  else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); wireMarginAdjust(); }
   else if(TAB==="tx"){ p.innerHTML=txPanel(); wireTx(); loadTx(false); }
   else if(TAB==="review"){ p.innerHTML=reviewPanel(); loadReview(); }
   else if(TAB==="tax"){ p.innerHTML=taxPanel(); wireTax(); }
