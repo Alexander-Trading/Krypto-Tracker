@@ -692,22 +692,37 @@ function posCard(p, mk){
 
   const displaySize = (live && mk.ctValCorrected && mk.size!=null) ? mk.size : p.size;
 
-  const margin = N(p.margin_balance);
+  // Manuelles Nachschiessen/Abziehen von Margin direkt in OKX landet nicht
+  // in der CSV (kein Trade, keine Gebuehr, kein PnL) - der Import sieht das
+  // nicht. margin_balance allein waere hier zu niedrig/hoch, deshalb kommt
+  // die von Hand gepflegte Korrektur (manual_margin_adjust) obendrauf.
+  const manualAdj = N(p.manual_margin_adjust||0);
+  const margin = N(p.margin_balance) + manualAdj;
   const notional = mark!=null ? mark*Math.abs(N(displaySize)) : null;
   const equity = upnl!=null ? margin+upnl : margin;
   const effLev = (notional!=null && equity>0) ? notional/equity : null;
+  const upnlPct = (upnl!=null && margin>0) ? upnl/margin*100 : null;
 
   const stats = st("Größe", nfTrim(displaySize)+" "+esc(p.base||""),
       nf(p.contracts,0)+" Kontrakte")
     + st("Ø Einstieg", nf(entry)+" USD")
     + st("Mark-Preis", mark?nf(mark)+" USD":"–", mark?"live":"nicht abrufbar")
-    + st("Margin", nf(p.margin_balance)+" "+ccy, "inkl. "+nf(p.funding)+" Funding")
+    + st("Margin", nf(margin)+" "+ccy,
+        "inkl. "+nf(p.funding)+" Funding"+(manualAdj!==0?" · "+sgn(manualAdj)+" manuell":""))
     + st("Unrealisiert", upnl!=null?sgn(upnl)+" "+ccy:"–",
-        upnl!=null&&mk.returnOnMargin?sgn(mk.returnOnMargin)+" % auf Margin":"",
+        upnlPct!=null?sgn(upnlPct)+" % auf Margin":"",
         upnl==null?"":upnl>=0?"up":"down")
     + st("Effektiver Hebel", effLev!=null?nf(effLev)+"×":"–",
         effLev!=null?"Notional "+nf(notional)+" USD / Equity "+nf(equity)+" "+ccy:
           (mark?"Margin/Equity ≤ 0":"wartet auf Mark-Preis"));
+
+  const marginAdjBtn = `<div class="note" style="padding:6px 0 0;display:flex;
+      justify-content:space-between;align-items:center">
+    <span>Manuelle Margin-Korrektur${manualAdj!==0?": "+sgn(manualAdj)+" "+esc(ccy):""}
+      ${manualAdj!==0?" (Nachschuss/Entnahme, die OKX-Exporte nicht erfassen)":""}</span>
+    <button class="act" style="padding:4px 10px;font-size:12px"
+      onclick="adjustMargin(${JSON.stringify(p.instrument)},${JSON.stringify(String(manualAdj))})"
+      >${manualAdj!==0?"Ändern":"Margin nachtragen"}</button></div>`;
 
   const single = live && mk.liquidationPrice ? N(mk.liquidationPrice) : null;
   const range = mk && mk.liquidationRange ? mk.liquidationRange.map(N) : null;
@@ -741,8 +756,30 @@ function posCard(p, mk){
       <div><div class="ct">${esc(p.instrument)}</div>
         <div class="eyebrow">${p.side==="long"?"Long":"Short"} · Isolated</div></div>
       <div class="mono" style="font-size:12px;color:var(--dim)">Stand ${day(p.as_of)}</div>
-    </div><div class="stats">${stats}</div>${liqB}${errs}${picker}</div>`;
+    </div><div class="stats">${stats}</div>${marginAdjBtn}${liqB}${errs}${picker}</div>`;
 }
+
+async function adjustMargin(instrument, current){
+  const v = prompt(
+    "Manuelle Margin-Korrektur für "+instrument+"\n\n"+
+    "Trage hier ein, wie viel du zusätzlich zur importierten Margin "+
+    "manuell nachgeschossen (positiv) oder entnommen (negativ) hast - "+
+    "das taucht in der OKX-CSV nicht auf, wird hier aber addiert.\n\n"+
+    "Bisheriger Korrekturwert:", current||"0");
+  if(v===null) return;
+  const amount = v.trim().replace(",",".");
+  if(amount!=="" && isNaN(Number(amount))){
+    alert("Das ist keine gültige Zahl."); return;
+  }
+  try{
+    await api("/api/pos-margin-adjust",{instrument, amount: amount||"0"});
+    STATE = await api("/api/state");
+    render();
+  }catch(e){
+    alert("Das hat nicht geklappt: "+(e.message||e));
+  }
+}
+window.adjustMargin = adjustMargin;
 
 function pickerHtml(p, cands){
   return `<div class="liq"><div class="tile-k">Kontrakt zuordnen</div>
