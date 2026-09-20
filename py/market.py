@@ -346,7 +346,12 @@ async def snapshot(position, inst_id=None, inst_type=None):
     out["instType"] = inst_type
     size = abs(D(position["size"]))
     avg = D(position["avg_entry"])
-    margin = D(position["margin_balance"])
+    # manual_margin_adjust: von Hand nachgetragene Margin-Aenderung (Nachschuss/
+    # Entnahme direkt in OKX), die in der Trading-History-CSV nicht auftaucht
+    # und deshalb nicht in margin_balance steckt - siehe webapi.py. Ohne das
+    # hier mitzurechnen, wuerde sich der Liquidationspreis trotz Korrektur nie
+    # bewegen, obwohl er in Wirklichkeit von genau dieser Margin abhaengt.
+    margin = D(position["margin_balance"]) + D(position.get("manual_margin_adjust") or 0)
     side = position.get("side", "long")
 
     info = None
