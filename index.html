@@ -691,6 +691,12 @@ function posCard(p, mk){
     <div class="tile-v ${c||""}">${v}</div>${s?`<div class="tile-s">${s}</div>`:""}</div>`;
 
   const displaySize = (live && mk.ctValCorrected && mk.size!=null) ? mk.size : p.size;
+
+  const margin = N(p.margin_balance);
+  const notional = mark!=null ? mark*Math.abs(N(displaySize)) : null;
+  const equity = upnl!=null ? margin+upnl : margin;
+  const effLev = (notional!=null && equity>0) ? notional/equity : null;
+
   const stats = st("Größe", nfTrim(displaySize)+" "+esc(p.base||""),
       nf(p.contracts,0)+" Kontrakte")
     + st("Ø Einstieg", nf(entry)+" USD")
@@ -698,7 +704,10 @@ function posCard(p, mk){
     + st("Margin", nf(p.margin_balance)+" "+ccy, "inkl. "+nf(p.funding)+" Funding")
     + st("Unrealisiert", upnl!=null?sgn(upnl)+" "+ccy:"–",
         upnl!=null&&mk.returnOnMargin?sgn(mk.returnOnMargin)+" % auf Margin":"",
-        upnl==null?"":upnl>=0?"up":"down");
+        upnl==null?"":upnl>=0?"up":"down")
+    + st("Effektiver Hebel", effLev!=null?nf(effLev)+"×":"–",
+        effLev!=null?"Notional "+nf(notional)+" USD / Equity "+nf(equity)+" "+ccy:
+          (mark?"Margin/Equity ≤ 0":"wartet auf Mark-Preis"));
 
   const single = live && mk.liquidationPrice ? N(mk.liquidationPrice) : null;
   const range = mk && mk.liquidationRange ? mk.liquidationRange.map(N) : null;
