@@ -415,10 +415,10 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
     </div>
     <div class="msect">Daten &amp; Programm</div>
     <div class="menu-actions">
-      <button class="mrow" id="mn-export" data-target="btnDbExport"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5v11"/><path d="M7.5 10.5l4.5 4.5 4.5-4.5"/><path d="M4.5 19.5h15"/></svg><span>Datenbank sichern</span></button>
-      <button class="mrow" id="mn-import" data-target="btnDbImport"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15.5v-12"/><path d="M7.5 8L12 3.5 16.5 8"/><path d="M4.5 19.5h15"/></svg><span>Datenbank laden…</span></button>
-      <button class="mrow warnish" id="mn-reset" data-target="btnReset"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12.5h10L18 7M9 7V4.5h6V7"/></svg><span>Alles löschen</span></button>
-      <button class="mrow" id="mn-quit" data-target="btnQuit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5v8"/><path d="M7 6.5a7.5 7.5 0 1010 0"/></svg><span>Programm beenden</span></button>
+      <button class="mrow" id="btnDbExport"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5v11"/><path d="M7.5 10.5l4.5 4.5 4.5-4.5"/><path d="M4.5 19.5h15"/></svg><span>Datenbank sichern</span></button>
+      <button class="mrow" id="btnDbImport"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15.5v-12"/><path d="M7.5 8L12 3.5 16.5 8"/><path d="M4.5 19.5h15"/></svg><span>Datenbank laden…</span></button>
+      <button class="mrow warnish" id="btnReset"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12.5h10L18 7M9 7V4.5h6V7"/></svg><span>Alles löschen</span></button>
+      <button class="mrow" id="btnQuit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5v8"/><path d="M7 6.5a7.5 7.5 0 1010 0"/></svg><span>Programm beenden</span></button>
     </div>
   </div>
 </div>
@@ -441,13 +441,7 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
 
   <div id="panel"></div>
 
-  <div class="actions">
-    <button class="act" id="btnDbExport">Datenbank sichern</button>
-    <button class="act" id="btnDbImport">Datenbank laden…</button>
-    <input type="file" id="dbFile" accept=".db" class="hidden">
-    <button class="act warnish" id="btnReset">Alles löschen</button>
-    <button class="act spacer" id="btnQuit">Programm beenden</button>
-  </div>
+  <input type="file" id="dbFile" accept=".db" class="hidden">
   <div class="codever" id="codeVer"></div>
 </div>
 
@@ -1753,13 +1747,10 @@ document.addEventListener("keydown",e=>{
 document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
   closeMenu(); go(t.dataset.tab); window.scrollTo(0,0);
 });
-// Daten-Aktionen im Menue loesen einfach die vorhandenen Fussleisten-Buttons
-// aus - dieselbe Logik, dieselben Rueckfragen, kein zweiter Codepfad.
-document.querySelectorAll(".mrow").forEach(b=>b.onclick=()=>{
-  closeMenu();
-  const t = $("#"+b.dataset.target);
-  if(t) t.click();
-});
+// Die Daten-Aktionen im Menue sind die eigentlichen Buttons (btnDbExport usw.);
+// ihre Logik haengt weiter unten per onclick an den IDs. Hier wird nur das
+// Menue geschlossen (addEventListener, damit sich beides nicht ueberschreibt).
+document.querySelectorAll(".mrow").forEach(b=>b.addEventListener("click", closeMenu));
 
 async function refreshMarket(){
   try{
