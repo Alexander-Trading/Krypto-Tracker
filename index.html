@@ -207,6 +207,24 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .tx-hint{font-size:12.5px;color:var(--dim)}
 .lot{display:grid;grid-template-columns:1fr 120px 210px;gap:14px;align-items:center;
   padding:12px 20px;border-top:1px solid var(--line)}
+.lot>*{min-width:0;overflow-wrap:anywhere}
+.lotwrap{border-top:1px solid var(--line)}
+.lotwrap .lot{border-top:none;grid-template-columns:minmax(0,1.5fr) minmax(0,1fr) minmax(0,1.3fr)}
+.lw-t{font-size:14px;font-weight:500}
+.lw-s{font-family:var(--mono);font-size:11px;line-height:1.5;color:var(--faint);margin-top:2px}
+.lw-m{font-family:var(--mono);font-size:12px;line-height:1.5}
+.lw-r{text-align:right}
+.lotwrap .pos{color:var(--up)} .lotwrap .neg{color:var(--down)}
+.lotwrap .fee{color:var(--faint)}
+.ldet{padding:0 20px 12px}
+.ldet summary{cursor:pointer;font-family:var(--mono);font-size:11px;color:var(--faint)}
+.ld{display:grid;grid-template-columns:auto minmax(0,1fr);gap:3px 12px;padding:9px 0;
+  border-top:1px solid var(--line);font-family:var(--mono);font-size:11px;line-height:1.5}
+.ld:first-of-type{margin-top:8px}
+.ld .d{color:var(--faint)}
+.ld .q{text-align:right;font-size:12px}
+.ld .o{grid-column:1/-1;color:var(--faint);overflow-wrap:anywhere}
+.ld .m{grid-column:1/-1;display:flex;flex-wrap:wrap;gap:2px 12px}
 .lotbar{height:5px;border-radius:3px;background:var(--line);overflow:hidden}
 .lotbar i{display:block;height:100%;background:linear-gradient(90deg,var(--a20),var(--a23))}
 .years{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px}
@@ -308,7 +326,9 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
 @media (max-width:640px){
   .row{grid-template-columns:1fr auto auto;gap:7px}
   .when{grid-column:1/-1}
-  .lot{grid-template-columns:1fr;row-gap:6px}
+  .lot,.lotwrap .lot{grid-template-columns:minmax(0,1fr);row-gap:8px}
+  .lw-r{text-align:left}
+  .ldet{padding:0 16px 12px}
   .hero-v{font-size:31px}
   .search{margin-left:0;width:100%}
 }
@@ -576,6 +596,15 @@ function dash(){
     ? TAXR.years.reduce((a,y)=>a + N(y.par20.result) + N(y.par23.gain), 0)
     : null;
 
+  // Unrealisiertes Ergebnis auf Bestaenden ausserhalb von OKX (Trezor):
+  // aktueller Wert minus Kaufpreis. Gehoert zu "Unrealisiert", nicht in den
+  // Wechselkurseffekt.
+  const walletUnreal = (PF && PF.wallet && PF.wallet.resultEur != null)
+    ? N(PF.wallet.resultEur) : 0;
+  const hasPositions = (STATE.positions||[]).length > 0;
+  const unrealTotal = (adj.unrealizedEur!=null || walletUnreal!==0 || !hasPositions)
+    ? (adj.unrealizedEur||0) + walletUnreal : null;
+
   const tiles = `<div class="grid4" style="margin-top:12px">
     <div class="tile"><div class="tile-k">Eingezahlt</div>
       <div class="tile-v">${eur(dep)}</div>
@@ -587,13 +616,15 @@ function dash(){
       <div class="tile-v ${realized>=0?"up":"down"}">${realized!=null?sgn(realized)+" €":"–"}</div>
       <div class="tile-s">§20-Ergebnis + §23-Veräußerungsgewinn</div></div>
     <div class="tile"><div class="tile-k">Unrealisiert</div>
-      <div class="tile-v ${(adj.unrealizedEur??upnl)>=0?"up":"down"}">${
-        adj.unrealizedEur!=null ? sgn(adj.unrealizedEur)+" €"
+      <div class="tile-v ${(unrealTotal??upnl)>=0?"up":"down"}">${
+        unrealTotal!=null && (adj.unrealizedEur!=null || walletUnreal!==0)
+          ? sgn(unrealTotal)+" €"
         : upnl!=null ? sgn(upnl)+" "+esc(pos&&pos.settle_ccy||"") : "–"}</div>
-      <div class="tile-s">${upnlNative
-        ? (adj.unrealizedEur!=null ? upnlNative+" · " : "")
-          + "bereits in Ergebnis gesamt"
-        : "Kurs fehlt"}</div></div>
+      <div class="tile-s">${[
+        walletUnreal!==0 ? `Trezor ${sgn(walletUnreal)} €` : "",
+        upnlNative ? (adj.unrealizedEur!=null ? upnlNative : "") : "",
+        (upnlNative || walletUnreal!==0) ? "bereits in Ergebnis gesamt" : "Kurs fehlt"
+      ].filter(Boolean).join(" · ")}</div></div>
   </div>`;
 
   // Ergebnis gesamt = Realisiert (alle Jahre) + Unrealisiert + Wechselkurseffekt
@@ -602,14 +633,15 @@ function dash(){
   // Buchungstags-Kurs bewertet wird). Ohne diese dritte Komponente gehen die
   // Zahlen scheinbar nicht auf - ist aber kein Fehler, nur bisher unsichtbar
   // gewesen.
-  const fxNote = (res!=null && realizedAllTime!=null && adj.unrealizedEur!=null)
+  const fxNote = (res!=null && realizedAllTime!=null && unrealTotal!=null)
     ? (() => {
-        const fx = res - realizedAllTime - adj.unrealizedEur;
+        const fx = res - realizedAllTime - unrealTotal;
         if(!Number.isFinite(fx) || Math.abs(fx) < 0.01) return "";
         return `<div class="tag" style="margin-top:10px;
           display:block;padding:8px 10px;font-size:11px;line-height:1.5;
           background:var(--panel-2);color:var(--dim)">Ergebnis gesamt = Realisiert (alle Jahre) +
-          Unrealisiert ${fx>=0?"+":"−"} ${nf(Math.abs(fx))} € Wechselkurseffekt auf dein
+          Unrealisiert${walletUnreal!==0 ? ` (davon Trezor ${sgn(walletUnreal)} €)` : ""}
+          ${fx>=0?"+":"−"} ${nf(Math.abs(fx))} € Wechselkurseffekt auf dein
           eingezahltes, nicht investiertes Geld (freies USDC/USDT auf dem Handelskonto,
           heute statt zum Buchungstag bewertet).</div>`;
       })()
@@ -1099,31 +1131,31 @@ function taxPanel(){
     // älteste (der ist bei gemischten Beständen längst frei).
     const next = pendList[0];
     const p = next ? Math.min(100, next.held_days/365*100) : 100;
-    const detail = list.map(l=>`<div class="row" style="padding:7px 0">
-        <div class="when">${day(l.acquired)}</div>
-        <div class="what"><div class="note-s">${l.origin?esc(l.origin):"–"}</div></div>
-        <div class="amt"><i>${nfx(l.qty)} ${esc(asset)}</i>
-          <i class="${l.tax_free?"pos":"fee"}">${l.tax_free
-            ? "steuerfrei" : "noch "+l.days_to_free+" Tage"}</i>
-          ${l.cost_eur!=null?`<i>${eur(l.cost_eur)} Kosten</i>`:""}
-          ${l.unrealized_eur!=null?`<i class="${N(l.unrealized_eur)>=0?"pos":"neg"}">${
-            sgn(l.unrealized_eur)} €</i>`:""}</div></div>`).join("");
+    const detail = list.map(l=>`<div class="ld">
+        <span class="d">${day(l.acquired)}</span>
+        <span class="q">${nfx(l.qty)} ${esc(asset)}</span>
+        ${l.origin?`<span class="o">${esc(l.origin)}</span>`:""}
+        <span class="m">
+          <span class="${l.tax_free?"pos":"fee"}">${l.tax_free
+            ? "steuerfrei" : "noch "+l.days_to_free+" Tage"}</span>
+          ${l.cost_eur!=null?`<span>${eur(l.cost_eur)} Kosten</span>`:""}
+          ${l.unrealized_eur!=null?`<span class="${N(l.unrealized_eur)>=0?"pos":"neg"}">${
+            sgn(l.unrealized_eur)} €</span>`:""}</span></div>`).join("");
     return `<div class="lotwrap"><div class="lot">
-      <div><div class="title">${nfx(totalQty)} ${esc(asset)}</div>
-        <div class="note-s">${plural(list.length,"Zukauf","Zukäufe")}${
+      <div><div class="lw-t">${nfx(totalQty)} ${esc(asset)}</div>
+        <div class="lw-s">${plural(list.length,"Zukauf","Zukäufe")}${
           totalCost!=null?` · ${eur(totalCost)} Kosten`:""}${
           totalValue!=null?` · heute ${eur(totalValue)}`:""}${
           unreal!=null?` (<span class="${unreal>=0?"pos":"neg"}">${sgn(unreal)} €</span>)`:""}</div></div>
       <div><div class="lotbar"><i style="width:${p}%"></i></div>
-        <div class="note-s" style="margin-top:4px">${next
+        <div class="lw-s" style="margin-top:5px">${next
           ? `nächster Teil: ${next.held_days} von 365 Tagen`
           : "alle Zukäufe länger als 365 Tage"}</div></div>
-      <div class="amt">${next
-        ? `<i>ab ${day(next.free_on)}</i><i class="fee">noch ${next.days_to_free} Tage</i>`
-          + `<div class="note-s">${nfx(freeQty)} ${esc(asset)} steuerfrei · ${nfx(pendQty)} ${esc(asset)} noch gebunden</div>`
-        : '<i class="pos">alles steuerfrei</i>'}</div>
-    </div><details style="padding:0 20px 10px"><summary class="note-s" style="cursor:pointer">
-      Einzelne Zukäufe anzeigen</summary>${detail}</details></div>`;}).join("");
+      <div class="lw-r">${next
+        ? `<div class="lw-m">ab ${day(next.free_on)} · <span class="fee">noch ${next.days_to_free} Tage</span></div>`
+          + `<div class="lw-s">${nfx(freeQty)} ${esc(asset)} steuerfrei · ${nfx(pendQty)} ${esc(asset)} noch gebunden</div>`
+        : '<div class="lw-m pos">alles steuerfrei</div>'}</div>
+    </div><details class="ldet"><summary>Einzelne Zukäufe anzeigen</summary>${detail}</details></div>`;}).join("");
 
   // Veraeusserungen zu Tag+Asset zusammenfassen - bei haeufigem Handel
   // (Funding jede Stunde, Gebuehren pro Trade) entsteht sonst eine Zeile
