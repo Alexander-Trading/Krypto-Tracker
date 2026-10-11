@@ -51,24 +51,56 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .hsub{font-family:var(--mono);font-size:10px;letter-spacing:.15em;
   text-transform:uppercase;color:var(--faint)}
 .hmeta{font-family:var(--mono);font-size:11px;color:var(--dim);text-align:right}
+.hright{display:flex;align-items:center;gap:10px}
 
-.tabs{display:flex;gap:2px;background:var(--panel);padding:4px;border-radius:12px;
-  border:1px solid var(--line);margin-bottom:20px;overflow-x:auto}
-.tab{flex:1;min-width:98px;padding:9px 12px;border:none;background:none;color:var(--dim);
-  font-family:var(--sans);font-size:13.5px;font-weight:500;border-radius:8px;
-  cursor:pointer;white-space:nowrap;transition:.15s}
-.tab:hover{color:var(--fg);background:rgba(255,255,255,.03)}
-.tab[aria-selected="true"]{background:var(--raise);color:var(--fg)}
-.tab:focus-visible{outline:2px solid var(--a20);outline-offset:1px}
+.menubtn{position:relative;display:inline-flex;align-items:center;justify-content:center;
+  width:38px;height:38px;border-radius:50%;border:1px solid var(--line);
+  background:var(--panel);color:var(--fg);cursor:pointer;box-shadow:var(--shadow);padding:0}
+.menubtn:hover{background:var(--raise)}
+.menubtn:focus-visible,.tab:focus-visible,.ovclose:focus-visible{outline:2px solid var(--a20);outline-offset:2px}
+.menubtn svg{width:20px;height:20px}
+.menubtn .tabbadge{position:absolute;top:-5px;right:-5px;margin:0}
+.overlay{position:fixed;inset:0;z-index:500;background:var(--bg);overflow-y:auto;
+  padding:max(18px,env(safe-area-inset-top)) 20px 32px}
+.ovinner{max-width:720px;margin:0 auto}
+.ovhead{display:flex;align-items:center;justify-content:space-between;margin:6px 0 22px}
+.ovhead h2{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0}
+.ovclose{width:40px;height:40px;border-radius:50%;border:none;background:none;
+  color:var(--fg);cursor:pointer;display:inline-flex;align-items:center;justify-content:center}
+.ovclose svg{width:22px;height:22px}
+.menu-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px}
+.tab{position:relative;display:flex;flex-direction:column;align-items:center;
+  justify-content:flex-start;gap:10px;padding:20px 6px 16px;min-height:112px;
+  border:1px solid var(--line);border-radius:16px;background:var(--panel);
+  color:var(--fg);font-family:var(--sans);font-size:13.5px;font-weight:500;
+  line-height:1.25;text-align:center;cursor:pointer;transition:.15s}
+.tab:hover{background:var(--raise)}
+.tab svg{width:30px;height:30px;color:var(--dim);flex:none}
+.tab[aria-selected="true"]{background:var(--raise);border-color:var(--a20)}
+.tab[aria-selected="true"] svg{color:var(--a20)}
+.tab .tabbadge{position:absolute;top:8px;right:10px;margin:0}
+body.menu-open{overflow:hidden}
+.msect{font-family:var(--mono);font-size:10px;letter-spacing:.14em;text-transform:uppercase;
+  color:var(--faint);margin:26px 2px 10px}
+.menu-actions{display:flex;flex-direction:column;gap:8px}
+.mrow{display:flex;align-items:center;gap:14px;width:100%;padding:14px 16px;
+  border:1px solid var(--line);border-radius:14px;background:var(--panel);
+  color:var(--fg);font-family:var(--sans);font-size:14px;font-weight:500;
+  text-align:left;cursor:pointer}
+.mrow:hover{background:var(--raise)}
+.mrow svg{width:22px;height:22px;color:var(--dim);flex:none}
+.mrow.warnish{color:var(--down)} .mrow.warnish svg{color:var(--down)}
+.mrow:focus-visible{outline:2px solid var(--a20);outline-offset:2px}
 
 .card{background:var(--panel);border:1px solid var(--line);border-radius:14px;
   overflow:hidden;box-shadow:var(--shadow);transition:background .15s,border-color .15s}
 .card+.card,.grid+.card,.card+.grid{margin-top:12px}
 
 /* Theme-Umschalter */
-.themetoggle{display:flex;align-items:center;background:var(--panel);
+button{-webkit-tap-highlight-color:transparent}
+.themetoggle{flex:none;display:flex;align-items:center;background:var(--panel);
   border:1px solid var(--line);border-radius:99px;padding:3px;gap:2px;box-shadow:var(--shadow)}
-.themetoggle button{border:none;background:none;padding:6px 11px;border-radius:99px;
+.themetoggle button{white-space:nowrap;border:none;background:none;padding:6px 11px;border-radius:99px;
   font-family:var(--sans);font-size:11.5px;font-weight:600;color:var(--faint);cursor:pointer}
 .themetoggle button.on{background:var(--raise);color:var(--fg)}
 
@@ -331,6 +363,9 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
   .lw-r{text-align:left}
   .ldet{padding:0 16px 12px}
   .hero-v{font-size:31px}
+  .hright{width:100%}
+  .themetoggle button{padding:6px 9px}
+  .hright .hmeta{margin-right:auto;text-align:left}
   .tile-v{font-size:clamp(14px,4.1vw,18px)}
   .search{margin-left:0;width:100%}
 }
@@ -338,7 +373,7 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
 /* Druckansicht: nur der Steuerreport, hell und ohne Bedienelemente */
 @media print{
   body{background:#fff;color:#111}
-  .tabs,.actions,header .hmeta,.noprint,button{display:none!important}
+  .tabs,.actions,header .hmeta,.noprint,button,.overlay,.menubtn{display:none!important}
   .wrap{max-width:none;padding:0}
   .card,.tile,.taxcard,.hero{background:#fff!important;border-color:#bbb!important;
     break-inside:avoid}
@@ -366,29 +401,43 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
   <div style="font-size:13px;color:var(--dim)">Python-Laufzeit lädt (einmalig, danach schnell)…</div>
   <style>@keyframes pyspin{to{transform:rotate(360deg)}}</style>
 </div>
+<div class="overlay hidden noprint" id="menuOverlay" role="dialog" aria-modal="true" aria-label="Menü">
+  <div class="ovinner">
+    <div class="ovhead"><h2>Menü</h2>
+      <button class="ovclose" id="menuClose" aria-label="Menü schließen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg></button></div>
+    <div class="menu-grid">
+      <button class="tab" data-tab="dash" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg><span>Übersicht</span></button>
+      <button class="tab" data-tab="positions" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg><span>Positionen</span></button>
+      <button class="tab" data-tab="tx" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h15M15 4l4 4-4 4"/><path d="M20 16H5M9 12l-4 4 4 4"/></svg><span>Transaktionen</span></button>
+      <button class="tab" data-tab="review" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 5-5"/></svg><span>Prüfen</span><span class="tabbadge hidden" id="reviewBadge">0</span></button>
+      <button class="tab" data-tab="tax" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2.2"/><path d="M8.5 7.5h7M8.5 12h.01M12 12h.01M15.5 12h.01M8.5 16h.01M12 16h.01M15.5 16h.01"/></svg><span>Steuer</span></button>
+      <button class="tab" data-tab="import" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5v11"/><path d="M7.5 10.5l4.5 4.5 4.5-4.5"/><path d="M4.5 19.5h15"/></svg><span>Import</span></button>
+    </div>
+    <div class="msect">Daten &amp; Programm</div>
+    <div class="menu-actions">
+      <button class="mrow" id="mn-export" data-target="btnDbExport"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5v11"/><path d="M7.5 10.5l4.5 4.5 4.5-4.5"/><path d="M4.5 19.5h15"/></svg><span>Datenbank sichern</span></button>
+      <button class="mrow" id="mn-import" data-target="btnDbImport"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 15.5v-12"/><path d="M7.5 8L12 3.5 16.5 8"/><path d="M4.5 19.5h15"/></svg><span>Datenbank laden…</span></button>
+      <button class="mrow warnish" id="mn-reset" data-target="btnReset"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6"/><path d="M6 7l1 12.5h10L18 7M9 7V4.5h6V7"/></svg><span>Alles löschen</span></button>
+      <button class="mrow" id="mn-quit" data-target="btnQuit"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3.5v8"/><path d="M7 6.5a7.5 7.5 0 1010 0"/></svg><span>Programm beenden</span></button>
+    </div>
+  </div>
+</div>
 <div class="wrap">
   <header>
     <div class="brand">
       <span class="dot"></span>
-      <div><h1>Krypto-Tracker</h1><div class="hsub">OKX</div></div>
+      <div><h1>Krypto-Tracker</h1><div class="hsub">OKX · <span id="pageName">Übersicht</span></div></div>
     </div>
-    <div style="display:flex;align-items:center;gap:14px">
+    <div class="hright">
       <div class="hmeta" id="meta"></div>
       <div class="themetoggle noprint" id="themeToggle">
         <button data-t="light">☀ Hell</button>
         <button data-t="dark">☾ Dunkel</button>
       </div>
+      <button class="menubtn noprint" id="menuBtn" aria-label="Menü öffnen"
+        aria-haspopup="dialog" aria-expanded="false"><svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="5" r="1.7"/><circle cx="12" cy="5" r="1.7"/><circle cx="19" cy="5" r="1.7"/><circle cx="5" cy="12" r="1.7"/><circle cx="12" cy="12" r="1.7"/><circle cx="19" cy="12" r="1.7"/><circle cx="5" cy="19" r="1.7"/><circle cx="12" cy="19" r="1.7"/><circle cx="19" cy="19" r="1.7"/></svg><span class="tabbadge hidden" id="menuBadge">0</span></button>
     </div>
   </header>
-
-  <div class="tabs" role="tablist">
-    <button class="tab" role="tab" data-tab="dash" aria-selected="true">Übersicht</button>
-    <button class="tab" role="tab" data-tab="positions" aria-selected="false">Positionen</button>
-    <button class="tab" role="tab" data-tab="tx" aria-selected="false">Transaktionen</button>
-    <button class="tab" role="tab" data-tab="review" aria-selected="false">Prüfen<span class="tabbadge hidden" id="reviewBadge">0</span></button>
-    <button class="tab" role="tab" data-tab="tax" aria-selected="false">Steuer</button>
-    <button class="tab" role="tab" data-tab="import" aria-selected="false">Import</button>
-  </div>
 
   <div id="panel"></div>
 
@@ -925,6 +974,8 @@ function updateReviewBadge(){
   const n = STATE ? (STATE.unknown||0) : 0;
   b.textContent = n;
   b.classList.toggle("hidden", n === 0);
+  const m = $("#menuBadge");
+  if(m){ m.textContent = n; m.classList.toggle("hidden", n === 0); }
 }
 
 /* ================= Steuer ================= */
@@ -1406,6 +1457,8 @@ function render(){
     ? `${plural(STATE.txCount,"Vorgang","Vorgänge")}<br>${day(STATE.from)} – ${day(STATE.to)}`:"";
   document.querySelectorAll(".tab").forEach(t=>
     t.setAttribute("aria-selected", t.dataset.tab===TAB));
+  const pn = document.querySelector('.tab[data-tab="'+TAB+'"] span:not(.tabbadge)');
+  if(pn && $("#pageName")) $("#pageName").textContent = pn.textContent;
   updateReviewBadge();
   const p=$("#panel");
 
@@ -1679,7 +1732,34 @@ async function handleLotsFile(f){
 
 function go(tab){TAB=tab;render();}
 window.go=go;
-document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>go(t.dataset.tab));
+function openMenu(){
+  $("#menuOverlay").classList.remove("hidden");
+  document.body.classList.add("menu-open");
+  $("#menuBtn").setAttribute("aria-expanded","true");
+  const sel = document.querySelector('.tab[aria-selected="true"]');
+  if(sel) sel.focus({preventScroll:true});
+}
+function closeMenu(){
+  $("#menuOverlay").classList.add("hidden");
+  document.body.classList.remove("menu-open");
+  $("#menuBtn").setAttribute("aria-expanded","false");
+}
+$("#menuBtn").onclick=openMenu;
+$("#menuClose").onclick=closeMenu;
+$("#menuOverlay").onclick=e=>{ if(e.target.id==="menuOverlay"||e.target.classList.contains("ovinner")) closeMenu(); };
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape" && !$("#menuOverlay").classList.contains("hidden")) closeMenu();
+});
+document.querySelectorAll(".tab").forEach(t=>t.onclick=()=>{
+  closeMenu(); go(t.dataset.tab); window.scrollTo(0,0);
+});
+// Daten-Aktionen im Menue loesen einfach die vorhandenen Fussleisten-Buttons
+// aus - dieselbe Logik, dieselben Rueckfragen, kein zweiter Codepfad.
+document.querySelectorAll(".mrow").forEach(b=>b.onclick=()=>{
+  closeMenu();
+  const t = $("#"+b.dataset.target);
+  if(t) t.click();
+});
 
 async function refreshMarket(){
   try{
