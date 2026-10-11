@@ -205,7 +205,7 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .fg-bar i{display:block;height:100%;background:var(--a23);border-radius:3px}
 .fg-bar.over i{background:var(--alert)}
 .tx-hint{font-size:12.5px;color:var(--dim)}
-.lot{display:grid;grid-template-columns:1fr 120px 150px;gap:14px;align-items:center;
+.lot{display:grid;grid-template-columns:1fr 120px 210px;gap:14px;align-items:center;
   padding:12px 20px;border-top:1px solid var(--line)}
 .lotbar{height:5px;border-radius:3px;background:var(--line);overflow:hidden}
 .lotbar i{display:block;height:100%;background:linear-gradient(90deg,var(--a20),var(--a23))}
@@ -520,7 +520,8 @@ function dash(){
       <span class="swatch" style="background:${ASSETCOL[i%ASSETCOL.length]}"></span>
       <span class="lname">${esc(h.asset)}</span>
       <span class="lval">${eur(h.eur)} · ${nf(N(h.eur)/sum*100,1)} %</span>
-    </div>`).join("");
+    </div>${h.wallet && N(h.wallet)>0 ? `<div class="note-s" style="margin:-3px 0 2px 21px">
+      davon ${nfx(h.wallet)} ${esc(h.asset)} auf Trezor</div>` : ""}`).join("");
 
   const pos = (STATE.positions||[])[0];
   const mk = (MARKET||[])[0];
@@ -547,6 +548,9 @@ function dash(){
         <span class="delta ${res>=0?"up":"down"}">${sgn(res)} €${
           pct!=null?` · ${sgn(pct)} %`:""}</span>
         <span style="margin-left:8px">gegenüber ${eur(dep)} eingezahlt</span></div>` : ""}
+      ${PF && PF.wallet ? `<div class="note-s" style="margin-top:6px">davon auf Trezor/Wallet:
+        ${eur(PF.wallet.valueEur)}${PF.wallet.resultEur!=null
+          ? ` · ${sgn(PF.wallet.resultEur)} € gegenüber Kaufpreis`:""}</div>` : ""}
       <div class="lsplit" style="margin-top:10px">${[
         PF && PF.asOf ? `Bewertet zum ${day(PF.asOf)}` : "",
         adj.adjustedNote,
@@ -1084,20 +1088,42 @@ function taxPanel(){
     const totalQty = list.reduce((s,l)=> s + N(l.qty), 0);
     const knownCost = list.every(l=> l.cost_eur!=null);
     const totalCost = knownCost ? list.reduce((s,l)=> s + N(l.cost_eur), 0) : null;
-    const oldest = list[0];
-    const freeCount = list.filter(l=> l.tax_free).length;
-    const pendingCount = list.length - freeCount;
-    const p = Math.min(100, oldest.held_days/365*100);
-    return `<div class="lot">
+    const knownValue = list.every(l=> l.value_eur!=null);
+    const totalValue = knownValue ? list.reduce((s,l)=> s + N(l.value_eur), 0) : null;
+    const unreal = (totalValue!=null && totalCost!=null) ? totalValue - totalCost : null;
+    const freeList = list.filter(l=> l.tax_free);
+    const pendList = list.filter(l=> !l.tax_free);
+    const freeQty = freeList.reduce((s,l)=> s + N(l.qty), 0);
+    const pendQty = pendList.reduce((s,l)=> s + N(l.qty), 0);
+    // Der nächste Zukauf, der steuerfrei wird, bestimmt den Balken - nicht der
+    // älteste (der ist bei gemischten Beständen längst frei).
+    const next = pendList[0];
+    const p = next ? Math.min(100, next.held_days/365*100) : 100;
+    const detail = list.map(l=>`<div class="row" style="padding:7px 0">
+        <div class="when">${day(l.acquired)}</div>
+        <div class="what"><div class="note-s">${l.origin?esc(l.origin):"–"}</div></div>
+        <div class="amt"><i>${nfx(l.qty)} ${esc(asset)}</i>
+          <i class="${l.tax_free?"pos":"fee"}">${l.tax_free
+            ? "steuerfrei" : "noch "+l.days_to_free+" Tage"}</i>
+          ${l.cost_eur!=null?`<i>${eur(l.cost_eur)} Kosten</i>`:""}
+          ${l.unrealized_eur!=null?`<i class="${N(l.unrealized_eur)>=0?"pos":"neg"}">${
+            sgn(l.unrealized_eur)} €</i>`:""}</div></div>`).join("");
+    return `<div class="lotwrap"><div class="lot">
       <div><div class="title">${nfx(totalQty)} ${esc(asset)}</div>
-        <div class="note-s">${list.length} Zukäufe${totalCost!=null?` · ${eur(totalCost)} Kosten gesamt`:""}</div></div>
+        <div class="note-s">${plural(list.length,"Zukauf","Zukäufe")}${
+          totalCost!=null?` · ${eur(totalCost)} Kosten`:""}${
+          totalValue!=null?` · heute ${eur(totalValue)}`:""}${
+          unreal!=null?` (<span class="${unreal>=0?"pos":"neg"}">${sgn(unreal)} €</span>)`:""}</div></div>
       <div><div class="lotbar"><i style="width:${p}%"></i></div>
-        <div class="note-s" style="margin-top:4px">ältester Teil: ${oldest.held_days} von 365 Tagen</div></div>
-      <div class="amt">${pendingCount===0
-        ? '<i class="pos">alles steuerfrei</i>'
-        : `<i>ab ${day(oldest.free_on)}</i><i class="fee">noch ${oldest.days_to_free} Tage</i>`
-          + (freeCount?`<div class="note-s">${freeCount} Zukäufe bereits steuerfrei</div>`:"")}</div>
-    </div>`;}).join("");
+        <div class="note-s" style="margin-top:4px">${next
+          ? `nächster Teil: ${next.held_days} von 365 Tagen`
+          : "alle Zukäufe länger als 365 Tage"}</div></div>
+      <div class="amt">${next
+        ? `<i>ab ${day(next.free_on)}</i><i class="fee">noch ${next.days_to_free} Tage</i>`
+          + `<div class="note-s">${nfx(freeQty)} ${esc(asset)} steuerfrei · ${nfx(pendQty)} ${esc(asset)} noch gebunden</div>`
+        : '<i class="pos">alles steuerfrei</i>'}</div>
+    </div><details style="padding:0 20px 10px"><summary class="note-s" style="cursor:pointer">
+      Einzelne Zukäufe anzeigen</summary>${detail}</details></div>`;}).join("");
 
   // Veraeusserungen zu Tag+Asset zusammenfassen - bei haeufigem Handel
   // (Funding jede Stunde, Gebuehren pro Trade) entsteht sonst eine Zeile
@@ -1140,8 +1166,9 @@ function taxPanel(){
     <div class="taxgrid">${card23}${card20}${card22}</div>
     ${carryCard}
     <div class="sect">Offene Bestände und Haltefristen</div>
-    <div class="note" style="padding:0 20px 10px">Je Asset zusammengefasst - der älteste
-      Zukauf bestimmt den Balken, weil er nach FIFO zuerst steuerfrei wird.</div>
+    <div class="note" style="padding:0 20px 10px">Je Asset zusammengefasst - der nächste
+      Zukauf, der steuerfrei wird, bestimmt den Balken (FIFO: ältester Rest zuerst). Die
+      Einzelkäufe mit Herkunft und aktuellem Ergebnis stehen jeweils aufklappbar darunter.</div>
     <div class="card">${lots || `<div class="note" style="padding:16px 20px">
       Keine offenen Bestände.</div>`}</div>
     <div class="sect">Veräußerungen ${YEAR}</div>
@@ -1171,9 +1198,9 @@ function rowHtml(t, opts){
     const v=N(e.amount), cls=e.kind==="fee"?"fee":v>=0?"pos":"neg";
     const pre=e.kind==="fee"?"Gebühr ":v>=0?"+":"";
     return `<i class="${cls}">${pre}${nfx(e.amount)} ${esc(e.asset)}</i>`;}).join("");
-  const srcTag = t.source==="manual"
-    ? `<span class="tag src-manual">Manuell</span>` : "";
-  const delBtn = (opts.editable && t.source==="manual")
+  const srcTag = (t.source==="manual" ? `<span class="tag src-manual">Manuell</span>` : "")
+    + (t.account==="wallet" ? `<span class="tag src-manual">Trezor</span>` : "");
+  const delBtn = (opts.editable && (t.source==="manual" || t.source==="wallet_csv"))
     ? `<button class="txdel" data-id="${t.id}" title="Buchung löschen">✕</button>` : "";
   return `<div class="row"><div class="when">${dtm(t.ts_utc)}</div>
     <div class="what"><div class="title">${esc(TXL[t.tx_type]||t.tx_type)}
@@ -1200,8 +1227,9 @@ function txPanel(){
 }
 
 function txFormHtml(){
-  const accOpts = ["funding","trading","earn"]
-    .map(a=>`<option value="${a}">${a==="funding"?"Funding":a==="trading"?"Trading":"Earn"}</option>`).join("");
+  const ACC_L = {funding:"Funding",trading:"Trading",earn:"Earn",wallet:"Trezor / Wallet"};
+  const accOpts = ["funding","trading","earn","wallet"]
+    .map(a=>`<option value="${a}">${ACC_L[a]}</option>`).join("");
   const typeOpts = Object.entries(TXL)
     .map(([k,l])=>`<option value="${k}">${esc(l)}</option>`).join("");
   const bucketOpts = ORDER.map(k=>`<option value="${k}">${esc(B[k].s)}</option>`).join("");
@@ -1268,7 +1296,12 @@ async function loadTx(append){
 /* ================= Import ================= */
 
 const KIND={funding:"Funding History",trading:"Trading History",
-  deposit:"Krypto-Einzahlungen",leer:"ohne Datenzeilen"};
+  deposit:"Krypto-Einzahlungen",leer:"ohne Datenzeilen",
+  wallet:"Bestands-CSV (Trezor/Wallet)"};
+
+const LOTS_TEMPLATE = "Datum,Asset,Menge,EUR-Kosten,Herkunft\n"
+  + "2021-10-28,BTC,0.10000000,3000.00,Kraken · auf Trezor seit 20.10.2025\n";
+const LOTS_TEMPLATE_HREF = "data:text/csv;charset=utf-8," + encodeURIComponent(LOTS_TEMPLATE);
 
 function importPanel(){
   const runs=(STATE.imports||[]).map(r=>{
@@ -1283,6 +1316,17 @@ function importPanel(){
         Dieselbe Datei zweimal einzulesen ändert nichts.</div></div>
     <input type="file" id="file" accept=".csv,.txt,text/csv" class="hidden">
     <div id="impResult"></div>
+    <div class="sect">Bestand außerhalb von OKX (Trezor)</div>
+    <div class="drop" id="dropLots" tabindex="0" role="button">
+      <div class="drop-t">Bestands-CSV hierher ziehen</div>
+      <div class="drop-h">Eine Zeile je einzelnem Kauf, mit dem echten ursprünglichen
+        Kaufdatum und Kaufpreis - nicht dem Datum des Transfers auf die Wallet.
+        Spalten: Datum (JJJJ-MM-TT), Asset, Menge, EUR-Kosten, Herkunft (optional).
+        Die Datei ersetzt den bisherigen Wallet-Bestand komplett.
+        <a href="${LOTS_TEMPLATE_HREF}" download="bestand-vorlage.csv"
+           onclick="event.stopPropagation()">Vorlage herunterladen</a></div></div>
+    <input type="file" id="fileLots" accept=".csv,.txt,text/csv" class="hidden">
+    <div id="impLotsResult"></div>
     ${runs?`<div class="sect">Bisherige Importe</div><div class="card">${runs}</div>`:""}`;
 }
 
@@ -1517,7 +1561,7 @@ function wireTxForm(){
 
 function wireTxDelete(){
   document.querySelectorAll(".txdel").forEach(b=>b.onclick=async()=>{
-    if(!confirm("Diese manuell angelegte Buchung löschen?")) return;
+    if(!confirm("Diese Buchung löschen?")) return;
     try{
       const r = await api("/api/tx-delete", {id: +b.dataset.id});
       STATE = r.state; PF=TAXR=FEES=null;
@@ -1552,6 +1596,55 @@ function wireDrop(){
   d.ondrop=e=>{e.preventDefault();d.classList.remove("over");
     if(e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);};
   $("#file").onchange=e=>{if(e.target.files[0]) handleFile(e.target.files[0]);};
+
+  // Eigener try/catch: ein Fehler im Bestands-Bereich darf die Verkabelung
+  // des OKX-Uploads oben nicht mitreissen.
+  try{
+    const dl=$("#dropLots");
+    dl.onclick=()=>$("#fileLots").click();
+    dl.onkeydown=e=>{if(e.key==="Enter"||e.key===" "){e.preventDefault();$("#fileLots").click();}};
+    dl.ondragover=e=>{e.preventDefault();dl.classList.add("over");};
+    dl.ondragleave=()=>dl.classList.remove("over");
+    dl.ondrop=e=>{e.preventDefault();dl.classList.remove("over");
+      if(e.dataTransfer.files[0]) handleLotsFile(e.dataTransfer.files[0]);};
+    $("#fileLots").onchange=e=>{
+      if(e.target.files[0]) handleLotsFile(e.target.files[0]);
+      e.target.value="";};
+  }catch(e){ console.error("Bestands-Import nicht verkabelt:", e); }
+}
+
+function showLotsImport(r,name){
+  const rows=(r.summary||[]).map(x=>`<div class="row">
+    <div class="what"><div class="title">${esc(x.asset)}</div>
+      <div class="note-s">${plural(x.count,"Kauf","Käufe")}</div></div>
+    <div class="amt"><i>${nfx(x.qty)} ${esc(x.asset)}</i><i class="fee">${eur(x.cost)} Kosten</i></div></div>`).join("");
+  const probs=(r.problems||[]).map(p=>`Zeile ${p.line}: ${esc(p.problem)}`);
+  $("#impLotsResult").innerHTML=`<div class="card" style="margin-top:12px"><div class="kv">
+    <span>Datei <b>${esc(name)}</b></span><span>Gelesen <b>${r.rowsRead}</b></span>
+    <span>Übernommen <b>${r.imported}</b></span>
+    ${r.skipped?`<span>Übersprungen <b>${r.skipped}</b></span>`:""}
+    </div>${rows}
+    ${(r.warnings||[]).length?`<div class="warn"><b>Hinweis</b>${r.warnings.map(esc).join("<br>")}</div>`:""}
+    ${probs.length?`<div class="warn"><b>Diese Zeilen wurden nicht gelesen</b>${probs.join("<br>")}</div>`:""}
+    ${r.imported?`<div class="actions" style="border:none;padding:12px 20px 0;margin:0">
+      <button class="act primary" id="btnSaveLots">Stand jetzt sichern</button></div>`:""}</div>`;
+  if($("#btnSaveLots")) $("#btnSaveLots").onclick=()=>{
+    if(exportDb()) $("#btnSaveLots").textContent="Gesichert ✓";
+  };
+}
+
+async function handleLotsFile(f){
+  $("#impLotsResult").innerHTML=`<div class="card" style="margin-top:12px">
+    <div class="kv">Lese ${esc(f.name)} …</div></div>`;
+  try{
+    const r=await api("/api/import-lots",{name:f.name,text:await f.text()});
+    STATE=r.state; showLotsImport(r,f.name);
+    PF=null; TAXR=null; FEES=null;
+    await refreshDerived();
+  }catch(e){
+    $("#impLotsResult").innerHTML=`<div class="card" style="margin-top:12px">
+      <div class="warn"><b>Das hat nicht geklappt</b>${esc(e.message||e)}</div></div>`;
+  }
 }
 
 function go(tab){TAB=tab;render();}
