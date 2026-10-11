@@ -113,7 +113,8 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .hero-l{flex:1 1 260px;min-width:0}
 .hero-v{font-family:var(--mono);font-size:38px;font-weight:600;letter-spacing:-.045em;
   line-height:1.1;margin:6px 0 4px;font-variant-numeric:tabular-nums}
-.hero-sub{font-size:13px;color:var(--dim)}
+.hero-sub{display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px}
+.hero-vs{font-family:var(--mono);font-size:12px;color:var(--dim)}
 .delta{font-family:var(--mono);font-size:13px;font-weight:500;padding:2px 8px;
   border-radius:6px;display:inline-block}
 .delta.up{background:rgba(63,191,143,.13);color:var(--up)}
@@ -128,14 +129,14 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .lname{font-weight:500}
 .lval{margin-left:auto;font-family:var(--mono);font-size:12.5px;color:var(--dim);
   font-variant-numeric:tabular-nums}
-.lsplit{font-family:var(--mono);font-size:10.5px;color:var(--faint)}
+.lsplit{font-family:var(--mono);font-size:11.5px;line-height:1.6;color:var(--dim)}
 
 /* Kacheln */
 .grid{display:grid;gap:12px;grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
 .grid3{display:grid;gap:8px;grid-template-columns:repeat(3,1fr)}
 .grid4{display:grid;gap:8px;grid-template-columns:repeat(4,1fr)}
 @media (max-width:520px){
-  .grid4{grid-template-columns:repeat(2,1fr)}
+  .grid4{grid-template-columns:repeat(2,minmax(0,1fr))}
 }
 .grid2{display:grid;gap:12px;grid-template-columns:repeat(2,1fr)}
 .tile{background:var(--panel);border:1px solid var(--line);border-radius:14px;
@@ -143,7 +144,7 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .tile-k{font-family:var(--mono);font-size:10px;letter-spacing:.12em;
   text-transform:uppercase;color:var(--faint);margin-bottom:7px}
 .tile-v{font-family:var(--mono);font-size:21px;font-weight:500;letter-spacing:-.035em;
-  font-variant-numeric:tabular-nums}
+  font-variant-numeric:tabular-nums;white-space:nowrap}
 .tile-v.up{color:var(--up)} .tile-v.down{color:var(--down)}
 .tile-s{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:4px}
 
@@ -330,6 +331,7 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
   .lw-r{text-align:left}
   .ldet{padding:0 16px 12px}
   .hero-v{font-size:31px}
+  .tile-v{font-size:clamp(14px,4.1vw,18px)}
   .search{margin-left:0;width:100%}
 }
 
@@ -540,8 +542,7 @@ function dash(){
       <span class="swatch" style="background:${ASSETCOL[i%ASSETCOL.length]}"></span>
       <span class="lname">${esc(h.asset)}</span>
       <span class="lval">${eur(h.eur)} · ${nf(N(h.eur)/sum*100,1)} %</span>
-    </div>${h.wallet && N(h.wallet)>0 ? `<div class="note-s" style="margin:-3px 0 2px 21px">
-      davon ${nfx(h.wallet)} ${esc(h.asset)} auf Trezor</div>` : ""}`).join("");
+    </div>`).join("");
 
   const pos = (STATE.positions||[])[0];
   const mk = (MARKET||[])[0];
@@ -567,10 +568,7 @@ function dash(){
       ${res != null ? `<div class="hero-sub">
         <span class="delta ${res>=0?"up":"down"}">${sgn(res)} €${
           pct!=null?` · ${sgn(pct)} %`:""}</span>
-        <span style="margin-left:8px">gegenüber ${eur(dep)} eingezahlt</span></div>` : ""}
-      ${PF && PF.wallet ? `<div class="note-s" style="margin-top:6px">davon auf Trezor/Wallet:
-        ${eur(PF.wallet.valueEur)}${PF.wallet.resultEur!=null
-          ? ` · ${sgn(PF.wallet.resultEur)} € gegenüber Kaufpreis`:""}</div>` : ""}
+        <span class="hero-vs">gegenüber ${eur(dep)} eingezahlt</span></div>` : ""}
       <div class="lsplit" style="margin-top:10px">${[
         PF && PF.asOf ? `Bewertet zum ${day(PF.asOf)}` : "",
         adj.adjustedNote,
@@ -640,7 +638,7 @@ function dash(){
         return `<div class="tag" style="margin-top:10px;
           display:block;padding:8px 10px;font-size:11px;line-height:1.5;
           background:var(--panel-2);color:var(--dim)">Ergebnis gesamt = Realisiert (alle Jahre) +
-          Unrealisiert${walletUnreal!==0 ? ` (davon Trezor ${sgn(walletUnreal)} €)` : ""}
+          Unrealisiert${walletUnreal!==0 ? ` (inkl. Trezor ${sgn(walletUnreal)} €)` : ""}
           ${fx>=0?"+":"−"} ${nf(Math.abs(fx))} € Wechselkurseffekt auf dein
           eingezahltes, nicht investiertes Geld (freies USDC/USDT auf dem Handelskonto,
           heute statt zum Buchungstag bewertet).</div>`;
