@@ -25,7 +25,10 @@ SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
 # --- Vokabular -------------------------------------------------------------
 
-ACCOUNTS = {"funding", "trading", "earn"}
+# "wallet": Bestaende ausserhalb von OKX (z.B. Hardware-Wallet Trezor). Sie
+# zaehlen zum Portfolio und zur Haltefrist, werden aber nie gegen OKX-
+# Kontostaende abgeglichen.
+ACCOUNTS = {"funding", "trading", "earn", "wallet"}
 
 TX_TYPES = {
     "deposit",          # Fiat oder Krypto von aussen rein
@@ -117,8 +120,15 @@ class Entry:
     asset: str
     amount: Decimal
     kind: str = "principal"
+    # Tatsaechlich gezahlter EUR-Gesamtbetrag fuer diesen Zugang (Einstands-
+    # wert). Wenn gesetzt, hat er in der FIFO-Rechnung Vorrang vor jedem
+    # Tageskurs. So braucht ein Altbestand keine kuenstliche EUR-Gegenbuchung,
+    # die den Bestand und den Portfoliowert verfaelschen wuerde.
+    eur_value: Decimal = None
 
     def __post_init__(self):
+        if self.eur_value is not None:
+            self.eur_value = D(self.eur_value)
         self.amount = D(self.amount)
         self.asset = self.asset.upper().strip()
         if self.kind not in ENTRY_KINDS:
@@ -220,8 +230,12 @@ def add_transaction(conn: sqlite3.Connection, tx: Transaction) -> int | None:
     tx_id = cur.lastrowid
 
     conn.executemany(
-        "INSERT INTO entries (transaction_id, asset, amount, kind) VALUES (?, ?, ?, ?)",
-        [(tx_id, e.asset, dstr(e.amount), e.kind) for e in tx.entries],
+        "INSERT INTO entries (transaction_id, asset, amount, kind, eur_value, price_source) "
+        "VALUES (?, ?, ?, ?, ?, ?)",
+        [(tx_id, e.asset, dstr(e.amount), e.kind,
+          dstr(e.eur_value) if e.eur_value is not None else None,
+          "manual_cost" if e.eur_value is not None else None)
+         for e in tx.entries],
     )
     return tx_id
 
@@ -319,6 +333,16 @@ def delete_transaction(conn: sqlite3.Connection, tx_id: int):
         raise ValueError(f"Vorgang {tx_id} existiert nicht.")
     conn.execute("DELETE FROM transactions WHERE id = ?", (tx_id,))
     conn.commit()
+
+
+def delete_by_source(conn: sqlite3.Connection, source: str) -> int:
+    """Loescht alle Buchungen einer Quelle samt Entries. Gibt die Anzahl
+    geloeschter Buchungen zurueck."""
+    n = conn.execute("SELECT COUNT(*) FROM transactions WHERE source = ?",
+                     (source,)).fetchone()[0]
+    conn.execute("DELETE FROM transactions WHERE source = ?", (source,))
+    conn.commit()
+    return n
 
 
 def unknown_count(conn) -> int:

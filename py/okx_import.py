@@ -425,3 +425,199 @@ def import_file(conn, path, source=None):
         "warnings": warnings,
         "positions": positions,
     }
+
+
+# --- Wallet-Bestand (Trezor o.ae.) per Bestands-CSV --------------------------
+
+WALLET_SOURCE = "wallet_csv"
+
+_LOT_COLS = {
+    "date":   {"datum", "date", "kaufdatum", "kaufdatum (original)"},
+    "asset":  {"asset", "coin", "waehrung", "währung", "symbol", "token"},
+    "qty":    {"menge", "amount", "anzahl", "qty", "quantity"},
+    "cost":   {"eur-kosten", "eur_kosten", "eurkosten", "kosten", "kosten (eur)",
+               "cost", "cost_eur", "einstandspreis", "einstand", "kaufpreis"},
+    "origin": {"herkunft", "notiz", "note", "origin", "quelle", "bemerkung"},
+}
+
+
+def _lot_number(raw):
+    """Zahl aus CSV-Text. Akzeptiert 1234.56, 1234,56, 1.234,56 und 1,234.56.
+    Gibt None zurueck, wenn es keine Zahl ist."""
+    t = (raw or "").strip().replace("€", "").replace("EUR", "").replace(" ", "")
+    t = t.replace("'", "")
+    if not t:
+        return None
+    if "," in t and "." in t:
+        # Das zuletzt vorkommende Zeichen ist das Dezimalzeichen.
+        if t.rfind(",") > t.rfind("."):
+            t = t.replace(".", "").replace(",", ".")
+        else:
+            t = t.replace(",", "")
+    elif "," in t:
+        t = t.replace(",", ".")
+    try:
+        return Decimal(t)
+    except Exception:
+        return None
+
+
+def _lot_date(raw):
+    """Datum als YYYY-MM-DD. Akzeptiert JJJJ-MM-TT, TT.MM.JJJJ, TT.MM.JJ und
+    ISO-Zeitstempel."""
+    t = (raw or "").strip()
+    if not t:
+        return None
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d.%m.%y", "%Y/%m/%d", "%d/%m/%Y"):
+        try:
+            return datetime.strptime(t[:10] if fmt.startswith("%Y-") else t, fmt) \
+                .date().isoformat()
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(t.replace("Z", "+00:00")).date().isoformat()
+    except ValueError:
+        return None
+
+
+def parse_wallet_lots(text):
+    """Liest die Bestands-CSV. Gibt (lots, problems) zurueck. Jede Zeile ist
+    EIN Kauf mit seinem ursprünglichen Kaufdatum und Kaufpreis - nicht das
+    Datum des Transfers auf die Wallet. Fehlerhafte Zeilen werden mit
+    Zeilennummer gemeldet und uebersprungen, die uebrigen trotzdem gelesen."""
+    text = (text or "").lstrip("﻿")
+    lines = [ln for ln in text.splitlines() if ln.strip()]
+    if not lines:
+        raise ImportError_("Die Datei enthält keine Zeilen.")
+
+    header_line = lines[0]
+    counts = {d: header_line.count(d) for d in (";", ",", "\t")}
+    delim = max(counts, key=counts.get)
+    if counts[delim] == 0:
+        raise ImportError_(
+            "Kein Trennzeichen erkennbar. Erwartet: Datum, Asset, Menge, "
+            "EUR-Kosten, Herkunft (getrennt durch Komma oder Semikolon).")
+
+    reader = csv.reader(io.StringIO("\n".join(lines)), delimiter=delim)
+    rows = list(reader)
+    header = [h.strip().lower() for h in rows[0]]
+    idx = {}
+    for key, names in _LOT_COLS.items():
+        for i, h in enumerate(header):
+            if h in names:
+                idx[key] = i
+                break
+    missing = [k for k in ("date", "asset", "qty", "cost") if k not in idx]
+    if missing:
+        label = {"date": "Datum", "asset": "Asset", "qty": "Menge",
+                 "cost": "EUR-Kosten"}
+        raise ImportError_(
+            "Das ist keine Bestands-CSV. Es fehlen die Spalten: "
+            + ", ".join(label[m] for m in missing)
+            + ". Erwartet: Datum, Asset, Menge, EUR-Kosten, Herkunft.")
+
+    def cell(r, key):
+        i = idx.get(key)
+        return r[i].strip() if i is not None and i < len(r) else ""
+
+    today = datetime.now(timezone.utc).date().isoformat()
+    lots, problems = [], []
+    for n, r in enumerate(rows[1:], start=2):
+        d = _lot_date(cell(r, "date"))
+        asset = cell(r, "asset").upper()
+        qty = _lot_number(cell(r, "qty"))
+        cost = _lot_number(cell(r, "cost"))
+        origin = cell(r, "origin")
+
+        err = None
+        if d is None:
+            err = f"Datum „{cell(r, 'date')}“ nicht lesbar (erwartet JJJJ-MM-TT)"
+        elif d > today:
+            err = f"Datum {d} liegt in der Zukunft"
+        elif not re.fullmatch(r"[A-Z0-9]{2,15}", asset):
+            err = f"Asset „{cell(r, 'asset')}“ ungültig"
+        elif asset == "EUR":
+            err = "EUR ist kein Krypto-Bestand"
+        elif qty is None or qty <= 0:
+            err = f"Menge „{cell(r, 'qty')}“ ist keine positive Zahl"
+        elif cost is None or cost < 0:
+            err = f"EUR-Kosten „{cell(r, 'cost')}“ keine gültige Zahl"
+        if err:
+            problems.append({"line": n, "problem": err})
+            continue
+        lots.append({"line": n, "date": d, "asset": asset, "qty": qty,
+                     "cost": cost, "origin": origin})
+    return lots, problems
+
+
+def import_wallet_lots(conn, text, filename="bestand.csv"):
+    """Ersetzt den bisherigen Wallet-Bestand durch den Inhalt der CSV.
+
+    Die Datei gilt als vollstaendiger Stand des Bestands. Fruehere Zeilen aus
+    einer Bestands-CSV werden deshalb zuerst entfernt - so entstehen weder
+    Doppelbuchungen noch bleiben korrigierte Zeilen in alter Fassung stehen.
+    Von Hand angelegte Buchungen und OKX-Importe bleiben unberuehrt."""
+    lots, problems = parse_wallet_lots(text)
+    if not lots:
+        return {
+            "kind": "wallet", "timezone": None, "rowsRead": len(problems),
+            "imported": 0, "skipped": len(problems), "replaced": 0,
+            "problems": problems, "unknown": [], "positions": [],
+            "warnings": ["Keine gültige Zeile gefunden. Der bisherige Bestand "
+                         "wurde nicht verändert."],
+        }
+
+    replaced = L.delete_by_source(conn, WALLET_SOURCE)
+
+    seen = {}
+    for lot in lots:
+        key = (lot["date"], lot["asset"], L.dstr(lot["qty"]), L.dstr(lot["cost"]),
+               lot["origin"])
+        seen[key] = seen.get(key, 0) + 1
+        ext = "lot-" + L.hashlib.sha1(
+            ("|".join(map(str, key)) + f"#{seen[key]}").encode("utf-8")).hexdigest()[:16]
+        L.add_transaction(conn, L.Transaction(
+            ts_utc=f"{lot['date']}T00:00:00Z", tx_type="deposit",
+            account="wallet", tax_bucket="neutral", source=WALLET_SOURCE,
+            external_id=ext,
+            note=lot["origin"] or "Wallet-Bestand",
+            entries=[L.Entry(lot["asset"], lot["qty"], "principal",
+                             eur_value=lot["cost"])],
+            raw={"line": lot["line"], "file": filename},
+        ))
+    conn.commit()
+
+    warnings = []
+    zero_cost = [l for l in lots if l["cost"] == 0]
+    if zero_cost:
+        warnings.append(
+            f"{len(zero_cost)} Zeile(n) mit 0 € Kosten (z.B. Airdrop/Geschenk). "
+            "Ein späterer Verkauf wird dann in voller Höhe als Gewinn gerechnet.")
+    if replaced:
+        warnings.append(
+            f"{replaced} Zeile(n) aus einem früheren Bestandsimport wurden durch "
+            "diese Datei ersetzt.")
+
+    conn.execute(
+        """INSERT INTO import_runs (started_at, source, filename, file_sha256, rows_read,
+                                    rows_imported, rows_skipped, note)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (L.now_utc(), WALLET_SOURCE, filename, None, len(lots) + len(problems),
+         len(lots), len(problems),
+         json.dumps({"kind": "wallet", "tz": "UTC", "unknown": []},
+                    ensure_ascii=False)))
+    conn.commit()
+
+    by_asset = {}
+    for l in lots:
+        a = by_asset.setdefault(l["asset"], {"qty": Decimal(0), "cost": Decimal(0), "n": 0})
+        a["qty"] += l["qty"]; a["cost"] += l["cost"]; a["n"] += 1
+
+    return {
+        "kind": "wallet", "timezone": "UTC", "rowsRead": len(lots) + len(problems),
+        "imported": len(lots), "skipped": len(problems), "replaced": replaced,
+        "problems": problems, "unknown": [], "positions": [],
+        "warnings": warnings,
+        "summary": [{"asset": a, "qty": v["qty"], "cost": v["cost"], "count": v["n"]}
+                    for a, v in sorted(by_asset.items())],
+    }

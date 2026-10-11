@@ -293,29 +293,54 @@ def liquidation_price(size, avg_entry, margin_balance, mmr,
 
 # --- Historische EUR-Kurse ------------------------------------------------
 
-async def eur_rate_on(asset, day):
-    """Tagesschlusskurs asset/EUR von OKX. None, wenn es das Paar nicht gibt
-    oder der Tag nicht abgedeckt ist."""
-    if asset == "EUR":
-        return Decimal(1)
-
+async def _close_on(inst, day):
+    """Schlusskurs eines OKX-Paars an einem UTC-Tag, oder None."""
     from datetime import datetime, timezone
     start = datetime.fromisoformat(day).replace(tzinfo=timezone.utc)
     after = int((start.timestamp() + 86400) * 1000)
+    try:
+        data = await _get("/api/v5/market/history-candles", instId=inst,
+                          bar="1D", after=str(after), limit="1")
+    except MarketError:
+        return None
+    if not data:
+        return None
+    close = D(data[0][4])
+    return close if close != 0 else None
 
-    for inst, invert in ((f"{asset}-EUR", False), (f"EUR-{asset}", True)):
-        try:
-            data = await _get("/api/v5/market/history-candles", instId=inst,
-                              bar="1D", after=str(after), limit="1")
-        except MarketError:
+
+async def eur_rate_on(asset, day):
+    """Tagesschlusskurs asset/EUR von OKX. None, wenn es das Paar nicht gibt
+    oder der Tag nicht abgedeckt ist.
+
+    Gibt es kein direktes EUR-Paar (haeufig bei kleineren Coins), wird ueber
+    einen Dollar-Stablecoin umgerechnet: Coin/USDT bzw. Coin/USDC mal
+    Stablecoin/EUR. Das ist eine Naeherung (die Stablecoins weichen minimal
+    vom Dollar ab), aber besser als gar kein Kurs."""
+    if asset == "EUR":
+        return Decimal(1)
+
+    direct = await _close_on(f"{asset}-EUR", day)
+    if direct:
+        return direct
+    inverse = await _close_on(f"EUR-{asset}", day)
+    if inverse:
+        return Decimal(1) / inverse
+
+    for bridge in ("USDT", "USDC"):
+        if asset == bridge:
             continue
-        if not data:
+        leg1 = await _close_on(f"{asset}-{bridge}", day)
+        if not leg1:
             continue
-        close = D(data[0][4])
-        if close == 0:
-            continue
-        return (Decimal(1) / close) if invert else close
+        leg2 = await _close_on(f"{bridge}-EUR", day)
+        if leg2:
+            return leg1 * leg2
+        inv2 = await _close_on(f"EUR-{bridge}", day)
+        if inv2:
+            return leg1 / inv2
     return None
+
 
 # --- Gesamtbild ------------------------------------------------------------
 

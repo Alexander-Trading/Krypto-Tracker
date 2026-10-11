@@ -308,6 +308,17 @@ async def _route_post(path, body, conn):
         result["state"] = build_state(conn)
         return result
 
+    if path == "/api/import-lots":
+        # Bestands-CSV (z.B. Trezor): ersetzt den bisherigen Wallet-Bestand.
+        result = IMP.import_wallet_lots(
+            conn, body.get("text") or "",
+            (body.get("name") or "bestand.csv").replace("/", "_"))
+        result["summary"] = [
+            {**x, "qty": str(x["qty"]), "cost": str(x["cost"])}
+            for x in result.get("summary", [])]
+        result["state"] = build_state(conn)
+        return result
+
     if path == "/api/demo":
         seed_demo(conn)
         return build_state(conn)
@@ -356,10 +367,11 @@ async def _route_post(path, body, conn):
                            (int(body["id"]),)).fetchone()
         if not row:
             return {"__error__": "Vorgang nicht gefunden."}
-        if row["source"] != "manual":
+        if row["source"] not in ("manual", IMP.WALLET_SOURCE):
             return {"__error__":
-                "Nur manuell angelegte Buchungen lassen sich hier löschen. "
-                "Importierte Buchungen bitte über „Alles löschen“ + Re-Import korrigieren."}
+                "Nur manuell angelegte Buchungen und Wallet-Bestandszeilen lassen "
+                "sich hier löschen. OKX-Importe bitte über „Alles löschen“ + "
+                "Re-Import korrigieren."}
         L.delete_transaction(conn, int(body["id"]))
         return {"ok": True, "state": build_state(conn)}
 

@@ -98,29 +98,76 @@ def rates_from_own_trades(conn):
     return found
 
 
-async def build_rate_lookup(conn, assets, days, fetcher=None):
-    """Baut eine Kurstabelle. fetcher(asset, day) darf None liefern."""
+# Kurzzeit-Speicher fuer den heutigen Kurs. Der Tag ist noch nicht zu Ende, der
+# "Schlusskurs" von heute ist also nur ein Momentwert. Er darf deshalb nicht
+# dauerhaft in price_cache landen (sonst bliebe der Portfoliowert den ganzen
+# Tag auf dem ersten Abruf stehen), soll aber auch nicht bei jedem Tab-Wechsel
+# neu geholt werden.
+_TODAY_TTL = 60
+_today_cache = {}   # asset -> (monotonic_ts, kurs)
+
+
+def _today_utc():
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+async def build_rate_lookup(conn, assets, days, fetcher=None, pairs=None):
+    """Baut eine Kurstabelle. fetcher(asset, day) darf None liefern.
+
+    pairs: optional Liste von (asset, day). Dann werden genau diese Paare
+    bewertet statt aller Kombinationen aus assets x days - spart bei
+    Altbestaenden mit vielen Kaufterminen dutzende unnoetige Abrufe."""
+    import time
     own = rates_from_own_trades(conn)
     table, missing, sources = {}, set(), {}
+    today = _today_utc()
 
-    for asset in assets:
-        if asset == BASE:
+    if pairs is None:
+        pairs = [(a, d) for a in assets for d in days]
+    pairs = sorted({(a, d) for a, d in pairs if a != BASE})
+
+    for asset, day in pairs:
+        key = (asset, day)
+        is_today = (day == today)
+
+        # Exakter eigener Kurs an GENAU diesem Tag geht vor jeder
+        # externen Schaetzung - das ist der tatsaechlich gezahlte
+        # Kurs, kein Naeherungswert. (Fuer "heute" gilt das nicht: ein
+        # Umtauschkurs vom Morgen ist kein aktueller Marktkurs.)
+        own_today = (own.get(asset) or {}).get(day)
+        if own_today is not None and not is_today:
+            table[key] = own_today
+            sources[asset] = "aus eigenem Umtausch an diesem Tag (exakt)"
             continue
-        for day in days:
-            key = (asset, day)
-            # Exakter eigener Kurs an GENAU diesem Tag geht vor jeder
-            # externen Schaetzung - das ist der tatsaechlich gezahlte
-            # Kurs, kein Naeherungswert. Frueher stand ein zwischengespei-
-            # cherter/externer Tageskurs davor, was bei einem EUR<->Asset-
-            # Umtausch am selben Tag ein kuenstliches, aber falsches
-            # Gewinn/Verlust-Rauschen erzeugt hat (der externe Tageskurs
-            # weicht vom tatsaechlichen Ausfuehrungskurs immer leicht ab).
-            own_today = (own.get(asset) or {}).get(day)
-            if own_today is not None:
-                table[key] = own_today
-                sources[asset] = "aus eigenem Umtausch an diesem Tag (exakt)"
-                continue
 
+        if is_today:
+            hit = _today_cache.get(asset)
+            if hit and time.monotonic() - hit[0] < _TODAY_TTL:
+                table[key] = hit[1]
+                sources[asset] = "OKX-Kurs (aktuell)"
+                continue
+            if fetcher:
+                try:
+                    r = await fetcher(asset, day)
+                except Exception:
+                    r = None
+                if r is not None:
+                    table[key] = L.D(r)
+                    _today_cache[asset] = (time.monotonic(), L.D(r))
+                    sources[asset] = "OKX-Kurs (aktuell)"
+                    continue
+            # Abruf fehlgeschlagen: lieber der letzte bekannte Wert (als
+            # solcher gekennzeichnet) als gar keiner.
+            if hit:
+                table[key] = hit[1]
+                sources[asset] = "letzter bekannter Kurs (Abruf gerade nicht möglich)"
+                continue
+            r = cached_rate(conn, asset, day)
+            if r is not None:
+                table[key] = r
+                sources[asset] = "zwischengespeichert (Abruf gerade nicht möglich)"
+                continue
+        else:
             r = cached_rate(conn, asset, day)
             if r is not None:
                 table[key] = r
@@ -136,15 +183,16 @@ async def build_rate_lookup(conn, assets, days, fetcher=None):
                     store_rate(conn, asset, day, L.D(r), "okx")
                     sources[asset] = "OKX-Tageskurs"
                     continue
-            # Naechstgelegener eigener Umtauschkurs
-            cand = own.get(asset) or {}
-            if cand:
-                near = min(cand, key=lambda d: abs(
-                    (datetime.fromisoformat(d) - datetime.fromisoformat(day)).days))
-                table[key] = cand[near]
-                sources[asset] = "aus eigenen Umtauschvorgängen abgeleitet"
-                continue
-            missing.add(f"{asset} am {day}")
+
+        # Naechstgelegener eigener Umtauschkurs
+        cand = own.get(asset) or {}
+        if cand:
+            near = min(cand, key=lambda d: abs(
+                (datetime.fromisoformat(d) - datetime.fromisoformat(day)).days))
+            table[key] = cand[near]
+            sources[asset] = "aus eigenen Umtauschvorgängen abgeleitet"
+            continue
+        missing.add(f"{asset} am {day}")
 
     conn.commit()
     return table, sorted(missing), sources
@@ -176,13 +224,13 @@ def build_lots(conn, table):
     warnings = []
 
     rows = conn.execute(
-        """SELECT t.id, t.ts_utc, t.tx_type, t.tax_bucket, t.note
+        """SELECT t.id, t.ts_utc, t.tx_type, t.tax_bucket, t.note, t.account
            FROM transactions t
            ORDER BY t.ts_utc, t.id""").fetchall()
 
     for t in rows:
         entries = conn.execute(
-            "SELECT asset, amount, kind FROM entries WHERE transaction_id = ?",
+            "SELECT asset, amount, kind, eur_value FROM entries WHERE transaction_id = ?",
             (t["id"],)).fetchall()
         day = day_of(t["ts_utc"])
 
@@ -190,7 +238,12 @@ def build_lots(conn, table):
             asset, amt = e["asset"], L.D(e["amount"])
             if asset == BASE or amt == 0:
                 continue
-            eur = to_eur(table, asset, day, abs(amt))
+            # Bekannter Einstandswert (Wallet-Bestand): tatsaechlich gezahlter
+            # Betrag, keine Schaetzung ueber einen Tageskurs.
+            if amt > 0 and e["eur_value"] not in (None, ""):
+                eur = L.D(e["eur_value"])
+            else:
+                eur = to_eur(table, asset, day, abs(amt))
 
             if amt > 0:
                 # Zugang: neues Lot. Kosten sind der EUR-Gegenwert.
@@ -200,7 +253,8 @@ def build_lots(conn, table):
                         "ohne Kostenbasis erfasst.")
                 lots.setdefault(asset, deque()).append({
                     "qty": amt, "cost_eur": eur, "day": day,
-                    "ts": t["ts_utc"], "note": t["note"]})
+                    "ts": t["ts_utc"], "note": t["note"],
+                    "account": t["account"]})
             else:
                 # Abgang: Lots in FIFO-Reihenfolge verbrauchen
                 need = -amt
@@ -249,6 +303,7 @@ def build_lots(conn, table):
             open_lots.append({
                 "asset": asset, "qty": lot["qty"], "acquired": lot["day"],
                 "cost_eur": lot["cost_eur"],
+                "origin": lot.get("note"), "account": lot.get("account"),
                 "held_days": (today - acquired).days,
                 "free_on": free_on.isoformat(),
                 "days_to_free": max(0, (free_on - today).days),
@@ -375,12 +430,31 @@ BUCKET_LABELS = {
 
 
 async def build_report(conn, fetcher=None):
-    assets = [r[0] for r in conn.execute("SELECT DISTINCT asset FROM entries")]
-    days = [r[0] for r in conn.execute(
-        "SELECT DISTINCT substr(ts_utc,1,10) FROM transactions")]
-    table, missing_rates, sources = await build_rate_lookup(conn, assets, days, fetcher)
+    # Nur die Paare bewerten, die wirklich vorkommen - und nur dort, wo kein
+    # fester Einstandswert (entries.eur_value) vorliegt. Bei einem Altbestand
+    # mit Dutzenden Kaufterminen waeren sonst Hunderte Kursabrufe faellig.
+    pairs = [(r[0], r[1]) for r in conn.execute(
+        """SELECT DISTINCT e.asset, substr(t.ts_utc,1,10)
+           FROM entries e JOIN transactions t ON t.id = e.transaction_id
+           WHERE e.eur_value IS NULL OR e.amount < 0""")]
+    table, missing_rates, sources = await build_rate_lookup(
+        conn, [], [], fetcher, pairs=pairs)
 
     disposals, open_lots, warn = build_lots(conn, table)
+
+    # Offene Lots mit aktuellem Wert: zeigt je Kauf, was er heute wert ist.
+    today = _today_utc()
+    now_table, now_missing, now_sources = await build_rate_lookup(
+        conn, [], [], fetcher,
+        pairs=[(l["asset"], today) for l in open_lots])
+    for lot in open_lots:
+        rate = now_table.get((lot["asset"], today))
+        lot["rate_now"] = rate
+        lot["value_eur"] = (lot["qty"] * rate) if rate is not None else None
+        lot["unrealized_eur"] = (
+            lot["value_eur"] - lot["cost_eur"]
+            if lot["value_eur"] is not None and lot["cost_eur"] is not None
+            else None)
     p20, m20 = flat_bucket(conn, "par20", table)
     p22, m22 = flat_bucket(conn, "par22", table)
     carry = get_loss_carryforward(conn)
@@ -476,7 +550,7 @@ async def build_report(conn, fetcher=None):
         "warnings": warn,
         "missingRates": missing_rates[:20],
         "missingRatesCount": len(missing_rates),
-        "rateSources": sources,
+        "rateSources": {**sources, **now_sources},
         "unknownCount": unknown,
         "blocked": unknown > 0 or bool(missing_rates),
         "generatedAt": L.now_utc(),
@@ -486,9 +560,15 @@ async def build_report(conn, fetcher=None):
 # --- Portfolio fuer das Dashboard ------------------------------------------
 
 async def portfolio(conn, positions=None, fetcher=None):
-    """Bewertet die Bestaende in EUR und stellt sie dem Eingezahlten gegenueber."""
-    today = datetime.now(timezone.utc).date().isoformat()
+    """Bewertet die Bestaende in EUR und stellt sie dem Eingezahlten gegenueber.
+
+    Bestaende ausserhalb von OKX (Konto 'wallet', z.B. Trezor) gehen mit in den
+    Portfoliowert ein; ihr Einstandswert zaehlt als Eingezahlt, damit das
+    Ergebnis den echten Gewinn/Verlust zeigt und nicht den ganzen Bestand als
+    Gewinn."""
+    today = _today_utc()
     balances = L.balances(conn)
+    wallet_bal = L.balances(conn, account="wallet")
     assets = list(balances)
     table, missing, sources = await build_rate_lookup(conn, assets, [today], fetcher)
 
@@ -498,27 +578,44 @@ async def portfolio(conn, positions=None, fetcher=None):
         ccy = p.get("settle_ccy") or "USDC"
         in_margin[ccy] = in_margin.get(ccy, Decimal(0)) + L.D(p.get("margin_balance", 0))
 
-    holdings, total = [], Decimal(0)
+    holdings, total, wallet_total = [], Decimal(0), Decimal(0)
     for asset, amount in balances.items():
         if abs(amount) < Decimal("0.000000001"):
             continue
         eur = to_eur(table, asset, today, amount)
         if eur is not None:
             total += eur
+        w_amt = wallet_bal.get(asset, Decimal(0))
+        w_eur = to_eur(table, asset, today, w_amt) if w_amt else None
+        if w_eur is not None:
+            wallet_total += w_eur
         locked = in_margin.get(asset, Decimal(0))
         holdings.append({
             "asset": asset, "amount": amount, "eur": eur,
             "rate": table.get((asset, today)),
             "locked": min(locked, amount) if locked else Decimal(0),
             "free": amount - min(locked, amount) if locked else amount,
+            "wallet": w_amt if w_amt else None,
+            "walletEur": w_eur,
         })
     holdings.sort(key=lambda h: -(h["eur"] or Decimal(0)))
 
+    # Einstandswert der Wallet-Bestaende (fester Einstandswert je Zugang).
+    wallet_cost = Decimal(0)
+    for r in conn.execute(
+            """SELECT e.amount, e.eur_value FROM entries e
+               JOIN transactions t ON t.id = e.transaction_id
+               WHERE t.account = 'wallet' AND e.eur_value IS NOT NULL"""):
+        wallet_cost += L.D(r["eur_value"])
+
     deposits = Decimal(0)
     for r in conn.execute(
-            """SELECT e.asset, e.amount, t.ts_utc FROM transactions t
+            """SELECT e.asset, e.amount, e.eur_value, t.ts_utc FROM transactions t
                JOIN entries e ON e.transaction_id = t.id
                WHERE t.tx_type = 'deposit'"""):
+        if r["eur_value"] not in (None, ""):
+            deposits += L.D(r["eur_value"])
+            continue
         v = to_eur(table, r["asset"], day_of(r["ts_utc"]), L.D(r["amount"]))
         if v is not None:
             deposits += v
@@ -540,6 +637,10 @@ async def portfolio(conn, positions=None, fetcher=None):
         "depositedEur": net_in,
         "resultEur": result,
         "resultPct": (result / net_in * 100) if net_in else None,
+        "wallet": {
+            "valueEur": wallet_total, "costEur": wallet_cost,
+            "resultEur": (wallet_total - wallet_cost) if wallet_cost else None,
+        } if wallet_bal else None,
         "rateSources": sources,
         "missingRates": missing[:8],
         "asOf": today,

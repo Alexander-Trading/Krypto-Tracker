@@ -19,10 +19,10 @@ CREATE TABLE IF NOT EXISTS transactions (
 
     ts_utc        TEXT    NOT NULL,   -- ISO8601 in UTC, z.B. 2025-03-14T09:12:44Z
     tx_type       TEXT    NOT NULL,   -- siehe TX_TYPES in ledger.py
-    account       TEXT    NOT NULL,   -- funding | trading | earn
+    account       TEXT    NOT NULL,   -- funding | trading | earn | wallet
     tax_bucket    TEXT    NOT NULL,   -- par23 | par20 | par22 | neutral | unknown
 
-    source        TEXT    NOT NULL,   -- okx_csv_bills | okx_api | manual
+    source        TEXT    NOT NULL,   -- okx_csv | wallet_csv | manual
     external_id   TEXT,               -- billId / tradeId von OKX
     note          TEXT,
     raw           TEXT,               -- Originalzeile als JSON, unveraendert
@@ -45,7 +45,9 @@ CREATE TABLE IF NOT EXISTS entries (
     amount          TEXT    NOT NULL,   -- vorzeichenbehafteter Dezimalstring
     kind            TEXT    NOT NULL,   -- principal | fee | pnl | funding
 
-    -- Wird spaeter vom Preis-Service gefuellt, nicht beim Import.
+    -- Einstandswert in EUR fuer Zugaenge, deren Kaufpreis bekannt ist (z.B.
+    -- Wallet-Bestand aus der Bestands-CSV). Hat in der FIFO-Rechnung Vorrang
+    -- vor Tageskursen. Sonst leer.
     eur_value       TEXT,
     price_source    TEXT
 );
