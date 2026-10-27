@@ -116,3 +116,35 @@ CREATE TABLE IF NOT EXISTS app_state (
     value      TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
+
+
+-- Geschlossene Futures-Positionen aus dem OKX-Export "Position History".
+-- Reine Auswertung (Journal): Diese Tabelle geht NIE in Bestand oder Steuer
+-- ein. Gewinn, Gebuehren und Funding sind bereits ueber die Trading History
+-- gebucht - eine Buchung von hier aus waere eine Doppelzaehlung.
+CREATE TABLE IF NOT EXISTS closed_positions (
+    pos_key        TEXT PRIMARY KEY,  -- Instrument|Eroeffnung UTC|Richtung|Margin-Modus
+    instrument     TEXT NOT NULL,
+    opened_utc     TEXT NOT NULL,
+    closed_utc     TEXT NOT NULL,     -- "Position Update Time"
+    direction      TEXT,              -- long | short
+    margin_mode    TEXT,              -- isolated | cross
+    leverage       TEXT,
+    max_qty        TEXT,              -- Kontrakte
+    closed_qty     TEXT,
+    avg_open       TEXT,
+    avg_close      TEXT,
+    margin_ccy     TEXT,
+    pnl            TEXT,              -- Kursergebnis laut OKX (brutto)
+    pnl_ratio      TEXT,
+    fee            TEXT,
+    funding_fee    TEXT,
+    liq_fee        TEXT,
+    close_type     TEXT,
+    face_value     TEXT,
+    multiplier     TEXT,
+    raw            TEXT,
+    imported_at    TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_closedpos_closed ON closed_positions (closed_utc);

@@ -121,6 +121,8 @@ def detect_kind(rows):
     if not rows:
         return "leer"
     cols = set(rows[0].keys())
+    if {"Position Create Time", "Position Update Time", "Pnl"} <= cols:
+        return "positions"
     if {"Trade Type", "Position Balance"} <= cols:
         return "trading"
     if {"Type", "Before Balance", "After Balance"} <= cols:
@@ -269,6 +271,76 @@ def import_trading(conn, rows, meta, source):
     return added, skipped, unknown
 
 
+# --- Position History (nur Journal, keine Buchung) -------------------------
+
+def _pos_key(inst, opened_utc, direction, margin_mode):
+    return "|".join([inst, opened_utc, direction or "", margin_mode or ""])
+
+
+def import_position_history(conn, rows, meta):
+    """Speichert geschlossene Positionen fuer das Journal.
+
+    Bewusst KEINE Transaktion: Gewinn, Gebuehren und Funding derselben
+    Positionen kommen schon ueber die Trading History ins Ledger. Hier wird
+    nur abgelegt, was OKX je Position zusammenfasst.
+
+    Schluessel ist Instrument + Eroeffnungszeit + Richtung + Margin-Modus.
+    Ein spaeterer Export derselben Position (z.B. nachdem sie weiter
+    teilgeschlossen wurde) ueberschreibt den alten Stand, statt eine zweite
+    Zeile anzulegen. Gibt (neu, aktualisiert, unveraendert) zurueck."""
+    off = meta["tz_offset"]
+    added = updated = same = 0
+    fields = ("instrument", "opened_utc", "closed_utc", "direction", "margin_mode",
+              "leverage", "max_qty", "closed_qty", "avg_open", "avg_close",
+              "margin_ccy", "pnl", "pnl_ratio", "fee", "funding_fee", "liq_fee",
+              "close_type", "face_value", "multiplier")
+    for r in rows:
+        g = lambda k: (r.get(k) or "").strip()
+        inst = g("Instrument Name")
+        if not inst or not g("Position Create Time"):
+            continue
+        num = lambda k: L.dstr(L.D(g(k) or "0")) if g(k) not in ("", "-") else None
+        rec = {
+            "instrument": inst,
+            "opened_utc": to_utc(g("Position Create Time"), off),
+            "closed_utc": to_utc(g("Position Update Time") or g("Position Create Time"), off),
+            "direction": g("Direction").lower() or None,
+            "margin_mode": g("Margin Mode").lower() or None,
+            "leverage": num("Leverage"),
+            "max_qty": num("Max Position Quantity"),
+            "closed_qty": num("Total Close Quantity"),
+            "avg_open": num("Average Open Price"),
+            "avg_close": num("Average Close Price"),
+            "margin_ccy": g("Margin Currency") if g("Margin Currency") not in ("", "-") else None,
+            "pnl": num("Pnl") or "0",
+            "pnl_ratio": num("Pnl Ratio"),
+            "fee": num("Fee") or "0",
+            "funding_fee": num("Funding Fee") or "0",
+            "liq_fee": num("Liquidation Clearance Fee") or "0",
+            "close_type": g("Type") or None,
+            "face_value": num("Contract Face Value"),
+            "multiplier": num("Contract Multiplier"),
+        }
+        key = _pos_key(inst, rec["opened_utc"], rec["direction"], rec["margin_mode"])
+        old = conn.execute("SELECT * FROM closed_positions WHERE pos_key = ?",
+                           (key,)).fetchone()
+        if old and all((old[f] or None) == (rec[f] or None) for f in fields):
+            same += 1
+            continue
+        conn.execute(
+            f"""INSERT OR REPLACE INTO closed_positions
+                (pos_key, {", ".join(fields)}, raw, imported_at)
+                VALUES (?, {", ".join("?" for _ in fields)}, ?, ?)""",
+            (key, *[rec[f] for f in fields],
+             json.dumps(r, ensure_ascii=False), L.now_utc()))
+        if old:
+            updated += 1
+        else:
+            added += 1
+    conn.commit()
+    return added, updated, same
+
+
 # --- Position aus der Trading History ableiten -----------------------------
 
 def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL, ct_val_map=None):
@@ -378,13 +450,17 @@ def import_file(conn, path, source=None):
         added, skipped, unknown = import_funding(conn, rows, meta, source)
     elif kind == "trading":
         added, skipped, unknown = import_trading(conn, rows, meta, source)
+    elif kind == "positions":
+        added, updated, skipped = import_position_history(conn, rows, meta)
+        unknown = set()
     elif kind in ("deposit", "leer"):
         added = skipped = 0
         unknown = set()
     else:
         raise ImportError_(
             "Dateiformat nicht erkannt. Erwartet wird ein Export aus dem "
-            "OKX Order Center (Funding History oder Trading History).")
+            "OKX Order Center (Funding History, Trading History oder "
+            "Position History).")
 
     warnings = []
     if rows and not meta["tz_found"]:
@@ -415,7 +491,12 @@ def import_file(conn, path, source=None):
             pass
     positions = derive_positions(rows, meta, ct_val_map=ct_val_map) if kind == "trading" else []
 
+    extra = {}
+    if kind == "positions":
+        extra = {"updated": updated, "journalOnly": True}
+
     return {
+        **extra,
         "kind": kind,
         "timezone": meta["tz_label"],
         "rowsRead": len(rows),

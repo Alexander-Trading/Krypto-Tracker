@@ -788,3 +788,146 @@ def report_csv(report):
         ]))
 
     return "\n".join(lines)
+
+
+# --- Positions-Journal (aus der Position History) ---------------------------
+#
+# Reine Auswertung. Die Zahlen stammen aus OKX' eigener Zusammenfassung je
+# Position und gehen nicht in Bestand oder Steuer ein - dort zaehlt allein die
+# Trading History. EUR-Werte sind zum Tageskurs des Schliesstags umgerechnet,
+# als Orientierung, nicht als steuerlicher Wert.
+
+def _journal_ccy(rec):
+    """Waehrung, in der OKX Pnl/Gebuehr/Funding dieser Position ausweist.
+    Rueckgabe (anzeige, kurs_asset)."""
+    m = (rec["margin_ccy"] or "").upper()
+    if m:
+        return m, m
+    parts = rec["instrument"].upper().replace("_", "-").split("-")
+    for c in ("USDT", "USDC"):
+        if c in parts:
+            return c, c
+    # z.B. ETH-USD_UM_XPERP: in USD abgerechnet (Unified Margin). Fuer den
+    # EUR-Wert wird der USDC-Kurs als Dollar-Naeherung genommen.
+    return "USD", "USDC"
+
+
+def _journal_item(rec):
+    D = L.D
+    inst = rec["instrument"]
+    base = inst.split("-")[0].upper()
+    ccy, rate_asset = _journal_ccy(rec)
+    inverse = ccy == base  # Coin-margined: Kontrakt in USD, Ergebnis in Coin
+
+    qty = D(rec["max_qty"] or 0)
+    closed = D(rec["closed_qty"] or 0)
+    unit = D(rec["face_value"] or 1) * D(rec["multiplier"] or 1)
+    size = qty * unit
+    lev = D(rec["leverage"] or 0)
+    p_open = D(rec["avg_open"] or 0)
+
+    pnl, fee = D(rec["pnl"]), D(rec["fee"])
+    funding, liq = D(rec["funding_fee"]), D(rec["liq_fee"])
+    net = pnl + fee + funding + liq
+
+    margin = None
+    if lev > 0 and p_open > 0 and size > 0:
+        margin = (size / p_open / lev) if inverse else (size * p_open / lev)
+
+    ratio = D(rec["pnl_ratio"]) if rec["pnl_ratio"] is not None else (
+        net / margin if margin else None)
+
+    t0 = datetime.fromisoformat(rec["opened_utc"].replace("Z", "+00:00"))
+    t1 = datetime.fromisoformat(rec["closed_utc"].replace("Z", "+00:00"))
+    hold_days = Decimal(str(round((t1 - t0).total_seconds() / 86400, 2)))
+
+    return {
+        "key": rec["pos_key"], "instrument": inst, "base": base,
+        "openedUtc": rec["opened_utc"], "closedUtc": rec["closed_utc"],
+        "year": int(rec["closed_utc"][:4]),
+        "direction": rec["direction"], "marginMode": rec["margin_mode"],
+        "leverage": lev, "contracts": qty, "closedContracts": closed,
+        "partial": closed < qty,
+        "size": size, "sizeUnit": "USD" if inverse else base,
+        "avgOpen": p_open, "avgClose": D(rec["avg_close"] or 0),
+        "ccy": ccy, "rateAsset": rate_asset,
+        "pnl": pnl, "fee": fee, "funding": funding, "liqFee": liq, "net": net,
+        "margin": margin, "ratio": ratio, "holdDays": hold_days,
+        "closeType": rec["close_type"],
+    }
+
+
+def _journal_summary(items):
+    D0 = Decimal(0)
+    n = len(items)
+    wins = [i for i in items if i["net"] > 0]
+    losses = [i for i in items if i["net"] < 0]
+    by_ccy = {}
+    for i in items:
+        c = by_ccy.setdefault(i["ccy"], {"pnl": D0, "fee": D0, "funding": D0,
+                                         "liqFee": D0, "net": D0, "n": 0})
+        for k in ("pnl", "fee", "funding", "liqFee", "net"):
+            c[k] += i[k]
+        c["n"] += 1
+
+    eur_ok = all(i.get("netEur") is not None for i in items)
+    def esum(k):
+        return sum((i[k] for i in items), D0) if eur_ok else None
+
+    def rank(i):
+        return i["netEur"] if eur_ok else i["net"]
+
+    gross_eur = esum("pnlEur")
+    fund_eur = esum("fundingEur")
+    funding_share = None
+    if gross_eur is not None and gross_eur > 0 and fund_eur is not None:
+        funding_share = -fund_eur / gross_eur * 100
+
+    sum_win = sum((rank(i) for i in wins), D0)
+    sum_loss = sum((rank(i) for i in losses), D0)
+    return {
+        "count": n, "wins": len(wins), "losses": len(losses),
+        "winRate": (Decimal(len(wins)) / n * 100) if n else None,
+        "byCcy": [{"ccy": k, **v} for k, v in sorted(by_ccy.items())],
+        "eurComplete": eur_ok,
+        "netEur": esum("netEur"), "pnlEur": gross_eur, "feeEur": esum("feeEur"),
+        "fundingEur": fund_eur, "liqFeeEur": esum("liqFeeEur"),
+        "avgNetEur": (esum("netEur") / n) if (n and eur_ok) else None,
+        "avgWin": (sum_win / len(wins)) if wins else None,
+        "avgLoss": (sum_loss / len(losses)) if losses else None,
+        "profitFactor": (sum_win / -sum_loss) if sum_loss < 0 else None,
+        "fundingShare": funding_share,
+        "avgHoldDays": (sum((i["holdDays"] for i in items), D0) / n) if n else None,
+        "best": max(items, key=rank)["key"] if items else None,
+        "worst": min(items, key=rank)["key"] if items else None,
+        "rankIn": "EUR" if eur_ok else "Abrechnungswährung",
+    }
+
+
+async def journal(conn, fetcher=None):
+    rows = [dict(r) for r in conn.execute(
+        "SELECT * FROM closed_positions ORDER BY closed_utc DESC, instrument")]
+    items = [_journal_item(r) for r in rows]
+
+    pairs = [(i["rateAsset"], i["closedUtc"][:10]) for i in items]
+    table, missing, _src = await build_rate_lookup(
+        conn, None, None, fetcher=fetcher, pairs=pairs) if pairs else ({}, [], {})
+    for i in items:
+        rate = table.get((i["rateAsset"], i["closedUtc"][:10]))
+        if i["rateAsset"] == BASE:
+            rate = Decimal(1)
+        i["eurRate"] = rate
+        for k in ("pnl", "fee", "funding", "liqFee", "net"):
+            i[k + "Eur"] = (i[k] * rate).quantize(Decimal("0.01")) if rate is not None else None
+
+    years = sorted({i["year"] for i in items}, reverse=True)
+    return {
+        "items": items,
+        "years": years,
+        "all": _journal_summary(items),
+        "byYear": {str(y): _journal_summary([i for i in items if i["year"] == y])
+                   for y in years},
+        "missingRates": missing,
+        "lastImport": conn.execute(
+            "SELECT MAX(imported_at) FROM closed_positions").fetchone()[0],
+    }

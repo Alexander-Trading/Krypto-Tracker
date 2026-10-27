@@ -102,6 +102,8 @@ def build_state(conn):
         "bucketTotals": totals,
         "unknown": L.unknown_count(conn),
         "positions": get_state(conn, "positions") or [],
+        "journalCount": conn.execute(
+            "SELECT COUNT(*) FROM closed_positions").fetchone()[0],
         "imports": [dict(r) for r in conn.execute(
             "SELECT filename, rows_read, rows_imported, started_at, note "
             "FROM import_runs ORDER BY id DESC LIMIT 8")],
@@ -236,6 +238,9 @@ async def _route_get(path, query, conn):
                     "__filename__": f"steuerreport-{year}.pdf"}
         return rep
 
+    if path == "/api/journal":
+        return await TAX.journal(conn, fetcher=MK.eur_rate_on)
+
     if path == "/api/fees":
         return TAX.fees_summary(conn)
 
@@ -319,6 +324,12 @@ async def _route_post(path, body, conn):
         result["state"] = build_state(conn)
         return result
 
+    if path == "/api/journal-clear":
+        # Nur das Journal leeren - Buchungen bleiben unberuehrt.
+        n = conn.execute("DELETE FROM closed_positions").rowcount
+        conn.commit()
+        return {"ok": True, "deleted": n, "state": build_state(conn)}
+
     if path == "/api/demo":
         seed_demo(conn)
         return build_state(conn)
@@ -327,7 +338,8 @@ async def _route_post(path, body, conn):
         conn.executescript(
             "DELETE FROM entries; DELETE FROM transactions; "
             "DELETE FROM balance_snapshots; DELETE FROM import_runs; "
-            "DELETE FROM app_state; DELETE FROM loss_carryforward;")
+            "DELETE FROM app_state; DELETE FROM loss_carryforward; "
+            "DELETE FROM closed_positions;")
         conn.commit()
         return build_state(conn)
 
