@@ -321,6 +321,16 @@ button{-webkit-tap-highlight-color:transparent}
 .amt i{display:block;font-style:normal}
 .amt i.pos{color:var(--up)} .amt i.neg{color:var(--down)}
 .amt i.fee{color:var(--faint);font-size:11px}
+.jrow{cursor:pointer}
+.jchev{color:var(--faint);font-size:18px;line-height:1;transition:transform .15s}
+.jitem.open .jchev{transform:rotate(90deg)}
+.jitem.open{background:var(--panel-2)}
+.jdetail .stats{border-top:1px solid var(--line)}
+.jtag{font-family:var(--mono);font-size:9.5px;letter-spacing:.06em;padding:1px 6px;
+  border-radius:99px;white-space:nowrap}
+.jtag.up{background:rgba(63,191,143,.13);color:var(--up)}
+.jtag.down{background:rgba(240,113,79,.13);color:var(--down)}
+.jchips{display:flex;gap:7px;flex-wrap:wrap;margin:0 0 12px}
 .more{display:flex;justify-content:center;padding:14px}
 
 /* Sonstiges */
@@ -408,6 +418,7 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
     <div class="menu-grid">
       <button class="tab" data-tab="dash" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.8"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.8"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.8"/></svg><span>Übersicht</span></button>
       <button class="tab" data-tab="positions" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 17l6-6 4 4 8-8"/><path d="M15 7h6v6"/></svg><span>Positionen</span></button>
+      <button class="tab" data-tab="journal" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h11.5a2 2 0 012 2v13H7a2 2 0 01-2-2z"/><path d="M5 17.5a2 2 0 012-2h11.5"/><path d="M9 8.5h6M9 11.5h4"/></svg><span>Journal</span></button>
       <button class="tab" data-tab="tx" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 8h15M15 4l4 4-4 4"/><path d="M20 16H5M9 12l-4 4 4 4"/></svg><span>Transaktionen</span></button>
       <button class="tab" data-tab="review" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3l8 3v6c0 4.5-3.2 8-8 9-4.8-1-8-4.5-8-9V6z"/><path d="M8.5 12l2.5 2.5 5-5"/></svg><span>Prüfen</span><span class="tabbadge hidden" id="reviewBadge">0</span></button>
       <button class="tab" data-tab="tax" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="5" y="3" width="14" height="18" rx="2.2"/><path d="M8.5 7.5h7M8.5 12h.01M12 12h.01M15.5 12h.01M8.5 16h.01M12 16h.01M15.5 16h.01"/></svg><span>Steuer</span></button>
@@ -1372,7 +1383,7 @@ async function loadTx(append){
 
 const KIND={funding:"Funding History",trading:"Trading History",
   deposit:"Krypto-Einzahlungen",leer:"ohne Datenzeilen",
-  wallet:"Bestands-CSV (Trezor/Wallet)"};
+  wallet:"Bestands-CSV (Trezor/Wallet)",positions:"Position History (nur Journal)"};
 
 const LOTS_TEMPLATE = "Datum,Asset,Menge,EUR-Kosten,Herkunft\n"
   + "2021-10-28,BTC,0.10000000,3000.00,Kraken · auf Trezor seit 20.10.2025\n";
@@ -1388,7 +1399,8 @@ function importPanel(){
   return `<div class="drop" id="drop" tabindex="0" role="button">
       <div class="drop-t">CSV hierher ziehen</div>
       <div class="drop-h">Funding History und Trading History aus dem OKX Order Center.
-        Dieselbe Datei zweimal einzulesen ändert nichts.</div></div>
+        Dieselbe Datei zweimal einzulesen ändert nichts. Die Position History wird
+        ebenfalls erkannt und landet nur im Journal, ohne Buchung.</div></div>
     <input type="file" id="file" accept=".csv,.txt,text/csv" class="hidden">
     <div id="impResult"></div>
     <div class="sect">Bestand außerhalb von OKX (Trezor)</div>
@@ -1411,8 +1423,10 @@ function showImport(r,name){
   $("#impResult").innerHTML=`<div class="card" style="margin-top:12px"><div class="kv">
     <span>Datei <b>${esc(name)}</b></span><span>Typ <b>${esc(KIND[r.kind]||r.kind)}</b></span>
     <span>Zeitzone <b>${esc(r.timezone)}</b></span><span>Gelesen <b>${r.rowsRead}</b></span>
-    <span>Neu <b>${r.imported}</b></span>${r.skipped?`<span>Bekannt <b>${r.skipped}</b></span>`:""}
-    </div>${r.timezone&&r.timezone!=="UTC"&&r.timezone!=="unbekannt"
+    <span>Neu <b>${r.imported}</b></span>${r.updated?`<span>Aktualisiert <b>${r.updated}</b></span>`:""}${r.skipped?`<span>Bekannt <b>${r.skipped}</b></span>`:""}
+    </div>${r.journalOnly?`<div class="note">Geschlossene Positionen fürs Journal übernommen.
+      Nichts gebucht – Bestand und Steuer bleiben unverändert.
+      <button class="act" style="padding:4px 10px;font-size:12px;margin-left:6px" onclick="go('journal')">Zum Journal</button></div>`:""}${r.timezone&&r.timezone!=="UTC"&&r.timezone!=="unbekannt"
       ? `<div class="note">Zeitstempel von ${esc(r.timezone)} nach UTC umgerechnet.</div>`:""}
     ${warn.length?`<div class="warn"><b>Hinweis</b>${warn.map(esc).join("<br>")}</div>`:""}
     <div class="actions" style="border:none;padding:12px 20px 0;margin:0">
@@ -1444,6 +1458,148 @@ async function handleFile(f){
   }
 }
 
+/* ================= Journal (Position History) ================= */
+
+let JRN=null, JYEAR="all", JOPEN=new Set();
+const CLOSETYPE={"Close all":"Komplett geschlossen","Partial close":"Teilweise geschlossen",
+  "Liquidation":"Liquidiert","Partial liquidation":"Teilweise liquidiert",
+  "ADL":"Auto-Deleveraging","Partial ADL":"Teilweise Auto-Deleveraging"};
+const instName = s => /XPERP|SWAP/.test(s||"")
+  ? String(s).split(/[-_]/).slice(0,2).join("-")+" Perp" : String(s||"");
+const holdTxt = d => { d=N(d); if(d<1) return nf(d*24,0)+" Std."; return nf(d,d<10?1:0)+" Tage"; };
+const sgnC = (v,c) => v==null ? "–" : sgn(v)+" "+esc(c);
+const sgnE = v => v==null ? "–" : sgn(v)+" €";
+const ud = v => v==null ? "" : (N(v)>0?"up":N(v)<0?"down":"");
+
+function journalPanel(){
+  return `<div id="jrn"><div class="card"><div class="empty"><p>Lade Journal…</p></div></div></div>`;
+}
+
+async function loadJournal(){
+  const el=$("#jrn"); if(!el) return;
+  try{
+    JRN = await api("/api/journal");
+    if(JYEAR!=="all" && !(JRN.years||[]).map(String).includes(String(JYEAR))) JYEAR="all";
+    renderJournal();
+  }catch(e){
+    el.innerHTML=`<div class="card"><div class="empty"><h3>Das hat nicht geklappt</h3>
+      <p>${esc(String(e.message||e))}</p>
+      <button class="act" onclick="loadJournal()">Erneut versuchen</button></div></div>`;
+  }
+}
+
+function journalDetail(i){
+  const st=(k,v,s,c)=>`<div class="stat"><div class="tile-k">${k}</div>
+    <div class="tile-v ${c||""}">${v}</div>${s?`<div class="tile-s">${s}</div>`:""}</div>`;
+  const c=i.ccy;
+  return `<div class="jdetail"><div class="stats">
+    ${st("Einstieg → Ausstieg", nf(i.avgOpen)+" → "+nf(i.avgClose), "USD je "+esc(i.base))}
+    ${st("Größe", nfTrim(i.size)+" "+esc(i.sizeUnit), nf(i.contracts,0)+" Kontrakte"
+        +(i.partial?" · "+nf(i.closedContracts,0)+" geschlossen":""))}
+    ${st("Margin (ca.)", i.margin!=null?nf(i.margin)+" "+esc(c):"–",
+        nf(i.leverage,0)+"× "+(i.marginMode==="cross"?"Cross":"Isoliert"))}
+    ${st("Kursgewinn", sgnC(i.pnl,c), sgnE(i.pnlEur), ud(i.pnl))}
+    ${st("Gebühren", sgnC(i.fee,c), sgnE(i.feeEur), ud(i.fee))}
+    ${st("Funding", sgnC(i.funding,c), sgnE(i.fundingEur), ud(i.funding))}
+    ${N(i.liqFee)!==0?st("Liquidationsgebühr", sgnC(i.liqFee,c), sgnE(i.liqFeeEur), ud(i.liqFee)):""}
+    ${st("Netto", sgnC(i.net,c), sgnE(i.netEur), ud(i.net))}
+    ${st("Rendite auf Margin", i.ratio!=null?sgn(N(i.ratio)*100)+" %":"–", "laut OKX, nach Kosten", ud(i.ratio))}
+    ${st("Laufzeit", holdTxt(i.holdDays), dtm(i.openedUtc)+" → "+dtm(i.closedUtc)+" UTC")}
+  </div><div class="note" style="padding:8px 18px 12px">${esc(i.instrument)} ·
+    ${esc(CLOSETYPE[i.closeType]||i.closeType||"")}${i.eurRate!=null
+      ?` · EUR-Kurs ${esc(i.rateAsset)} am ${day(i.closedUtc)}: ${nf(i.eurRate,4)}`:""}</div></div>`;
+}
+
+function journalRow(i, best, worst){
+  const open = JOPEN.has(i.key);
+  const tag = i.key===best ? `<span class="jtag up">Bester</span>`
+    : i.key===worst ? `<span class="jtag down">Schwächster</span>` : "";
+  const liq = /liquidation/i.test(i.closeType||"") ? `<span class="jtag down">Liquidiert</span>` : "";
+  return `<div class="jitem${open?" open":""}">
+    <div class="row jrow" role="button" tabindex="0" aria-expanded="${open}" data-jkey="${esc(i.key)}">
+      <div class="when">${day(i.closedUtc)}</div>
+      <div class="what"><div class="title">${esc(instName(i.instrument))}${tag}${liq}</div>
+        <div class="note-s">${i.direction==="short"?"Short":"Long"} ${nf(i.leverage,0)}× · ${holdTxt(i.holdDays)}${i.partial?" · teilweise":""}</div></div>
+      <div class="amt"><i class="${N(i.net)>=0?"pos":"neg"}">${sgnC(i.net,i.ccy)}</i>
+        <i class="fee">${i.netEur!=null?sgnE(i.netEur):"EUR-Kurs fehlt"}</i></div>
+      <div class="jchev" aria-hidden="true">›</div>
+    </div>${open?journalDetail(i):""}</div>`;
+}
+
+function renderJournal(){
+  const el=$("#jrn"); if(!el||!JRN) return;
+  const all=JRN.items||[];
+  if(!all.length){
+    el.innerHTML=`<div class="card"><div class="empty"><h3>Noch keine geschlossenen Positionen</h3>
+      <p>Lade im Import den Export <b>Position History</b> aus dem OKX Order Center hoch.
+      Er wird nur hier ausgewertet und nicht gebucht – Gewinn, Gebühren und Funding
+      kommen weiter aus der Trading History.</p>
+      <button class="act primary" onclick="go('import')">Zum Import</button></div></div>`;
+    return;
+  }
+  const years=JRN.years||[];
+  const S = JYEAR==="all" ? JRN.all : JRN.byYear[String(JYEAR)];
+  const items = JYEAR==="all" ? all : all.filter(i=>String(i.year)===String(JYEAR));
+  const native = (S.byCcy||[]).map(c=>sgnC(c.net,c.ccy)).join(" · ");
+  const T=(k,v,s,c)=>`<div class="tile"><div class="tile-k">${k}</div>
+    <div class="tile-v ${c||""}">${v}</div>${s?`<div class="tile-s">${s}</div>`:""}</div>`;
+  const chips = years.length>1 ? `<div class="chips jchips">${["all",...years].map(y=>
+    `<button class="chip" aria-pressed="${String(y)===String(JYEAR)}" data-jyear="${y}">${y==="all"?"Alle":y}</button>`).join("")}</div>` : "";
+
+  const share = S.fundingShare!=null && N(S.fundingShare)>0
+    ? `<div class="note" style="padding:12px 2px 0">Funding hat <b>${nf(S.fundingShare,0)} %</b> des Kursgewinns aufgezehrt.</div>` : "";
+  const pf = S.profitFactor!=null ? T("Profit-Faktor", nf(S.profitFactor), "Summe Gewinne / Summe Verluste") : "";
+  const avgWL = (S.avgWin!=null||S.avgLoss!=null)
+    ? T("Ø Gewinn / Ø Verlust",
+        (S.avgWin!=null?sgn(S.avgWin):"–")+" / "+(S.avgLoss!=null?sgn(S.avgLoss):"–"),
+        S.rankIn==="EUR"?"in €":"in Abrechnungswährung") : "";
+  const miss = (JRN.missingRates||[]).length
+    ? `<div class="warn" style="margin:12px 0 0"><b>EUR-Kurs fehlt</b>Für ${esc(JRN.missingRates.join(", "))}
+       gab es keinen Kurs (offline?). Die Summen in € sind deshalb ausgeblendet.</div>` : "";
+
+  el.innerHTML = `${chips}
+    <div class="grid2">
+      ${T("Netto"+(JYEAR==="all"?"":" "+JYEAR), S.netEur!=null?sgnE(S.netEur):native, S.netEur!=null?native:"", ud(S.netEur!=null?S.netEur:(S.byCcy[0]||{}).net))}
+      ${T("Trefferquote", S.winRate!=null?nf(S.winRate,0)+" %":"–", `${S.wins} von ${plural(S.count,"Position","Positionen")} im Plus`)}
+      ${T("Ø je Position", S.avgNetEur!=null?sgnE(S.avgNetEur):"–", "netto nach Kosten", ud(S.avgNetEur))}
+      ${T("Ø Haltedauer", S.avgHoldDays!=null?holdTxt(S.avgHoldDays):"–", "")}
+    </div>${miss}
+    <div class="sect">Woraus das Ergebnis besteht</div>
+    <div class="grid2">
+      ${T("Kursgewinn", sgnE(S.pnlEur), "", ud(S.pnlEur))}
+      ${T("Gebühren", sgnE(S.feeEur), "", ud(S.feeEur))}
+      ${T("Funding", sgnE(S.fundingEur), "", ud(S.fundingEur))}
+      ${N(S.liqFeeEur||0)!==0?T("Liquidationsgebühr", sgnE(S.liqFeeEur), "", "down"):""}
+      ${pf}${avgWL}
+    </div>${share}
+    <div class="sect">Geschlossene Positionen · ${items.length}</div>
+    <div class="card">${items.map(i=>journalRow(i,S.best,S.worst)).join("")}</div>
+    <div class="note" style="padding:12px 2px 0">Nur Auswertung: Diese Zahlen gehen nicht in Bestand
+      oder Steuer ein – dort zählt die Trading History. Euro-Werte zum Tageskurs des Schließtags
+      (USD über USDC), als Orientierung. Quelle: OKX Position History, zuletzt eingelesen
+      ${dtm(JRN.lastImport)}.</div>
+    <div class="actions" style="border:none;padding:12px 0 0;margin:0">
+      <button class="act" onclick="go('import')">Neuen Export einlesen</button>
+      <button class="act" id="btnJrnClear">Journal leeren</button></div>`;
+  wireJournal();
+}
+
+function wireJournal(){
+  document.querySelectorAll("[data-jyear]").forEach(b=>b.onclick=()=>{
+    JYEAR=b.dataset.jyear==="all"?"all":b.dataset.jyear; renderJournal(); });
+  document.querySelectorAll("[data-jkey]").forEach(r=>{
+    const t=()=>{ const k=r.dataset.jkey; JOPEN.has(k)?JOPEN.delete(k):JOPEN.add(k); renderJournal(); };
+    r.onclick=t;
+    r.onkeydown=e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); t(); } };
+  });
+  const c=$("#btnJrnClear");
+  if(c) c.onclick=async()=>{
+    if(!confirm("Journal leeren? Deine Buchungen bleiben unverändert.")) return;
+    try{ const r=await api("/api/journal-clear",{}); STATE=r.state; JOPEN.clear(); await loadJournal(); }
+    catch(e){ alert(e.message||e); }
+  };
+}
+
 /* ================= Rahmen ================= */
 
 function render(){
@@ -1466,6 +1622,7 @@ function render(){
     }
   }
   else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); wireMarginAdjust(); }
+  else if(TAB==="journal"){ p.innerHTML=journalPanel(); loadJournal(); }
   else if(TAB==="tx"){ p.innerHTML=txPanel(); wireTx(); loadTx(false); }
   else if(TAB==="review"){ p.innerHTML=reviewPanel(); loadReview(); }
   else if(TAB==="tax"){ p.innerHTML=taxPanel(); wireTax(); }
