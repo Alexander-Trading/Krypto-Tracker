@@ -185,7 +185,8 @@ def _cover(report, year, meta_text, styles):
     # Balken wie bei §20, sondern nur "wie nah an der Grenze".
     if p23_carry_in or (not p23_loss and p23_gain > 0):
         indent23 = ParagraphStyle("indent23", parent=styles["potmeta"], leftIndent=13)
-        carry_used = min(p23_carry_in, p23_gain) if not p23_loss else Decimal(0)
+        # Freigrenze vor Verlustvortrag (BFH IX R 27/04) - Wert aus tax.py
+        carry_used = Decimal(str(p23.get("carryUsed", 0)))
         carry_remaining = p23_carry_in - carry_used
         if p23_carry_in:
             flow.append(Spacer(1, 4))
@@ -201,15 +202,14 @@ def _cover(report, year, meta_text, styles):
                                                 ("TOPPADDING", (0, 0), (-1, -1), 0),
                                                 ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
         if not p23_loss and p23_gain > 0:
-            after_carry = max(p23_gain - carry_used, Decimal(0))
             flow.append(Spacer(1, 6))
             flow.append(Paragraph(
-                f"Freigrenze: {_money(after_carry)} von {_money(p23_fg)} - "
-                + ("darunter, komplett steuerfrei" if after_carry <= p23_fg else
+                f"Freigrenze: {_money(p23_gain)} von {_money(p23_fg)} - "
+                + ("darunter, komplett steuerfrei" if not p23["exceeded"] else
                    f"überschritten, GESAMTER Betrag steuerpflichtig: {_money(p23_taxable)}"),
                 indent23))
             flow.append(Spacer(1, 2))
-            pct_fg = float(min(after_carry, p23_fg) / p23_fg * 100) if p23_fg else 0
+            pct_fg = float(min(p23_gain, p23_fg) / p23_fg * 100) if p23_fg else 0
             flow.append(Table([[_bar(pct_fg, COL["par23"], width_mm=152)]],
                               colWidths=[165 * mm],
                               style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),
@@ -278,7 +278,8 @@ def _cover(report, year, meta_text, styles):
 
     if p22_carry_in or (not p22_loss and p22_result > 0):
         indent22 = ParagraphStyle("indent22", parent=styles["potmeta"], leftIndent=13)
-        carry_used = min(p22_carry_in, p22_result) if not p22_loss else Decimal(0)
+        # Freigrenze vor Verlustvortrag (BFH IX R 27/04) - Wert aus tax.py
+        carry_used = Decimal(str(p22.get("carryUsed", 0)))
         carry_remaining = p22_carry_in - carry_used
         if p22_carry_in:
             flow.append(Spacer(1, 4))
@@ -294,15 +295,14 @@ def _cover(report, year, meta_text, styles):
                                                 ("TOPPADDING", (0, 0), (-1, -1), 0),
                                                 ("BOTTOMPADDING", (0, 0), (-1, -1), 0)])))
         if not p22_loss and p22_result > 0:
-            after_carry = max(p22_result - carry_used, Decimal(0))
             flow.append(Spacer(1, 6))
             flow.append(Paragraph(
-                f"Freigrenze: {_money(after_carry)} von {_money(p22_fg)} - "
-                + ("darunter, komplett steuerfrei" if after_carry <= p22_fg else
+                f"Freigrenze: {_money(p22_result)} von {_money(p22_fg)} - "
+                + ("darunter, komplett steuerfrei" if not p22["exceeded"] else
                    f"überschritten, GESAMTER Betrag steuerpflichtig: {_money(p22_taxable)}"),
                 indent22))
             flow.append(Spacer(1, 2))
-            pct_fg = float(min(after_carry, p22_fg) / p22_fg * 100) if p22_fg else 0
+            pct_fg = float(min(p22_result, p22_fg) / p22_fg * 100) if p22_fg else 0
             flow.append(Table([[_bar(pct_fg, COL["par22"], width_mm=152)]],
                               colWidths=[165 * mm],
                               style=TableStyle([("LEFTPADDING", (0, 0), (-1, -1), 13),

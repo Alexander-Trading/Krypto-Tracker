@@ -1031,9 +1031,19 @@ function taxPanel(){
   // Zusatzhinweis darunter. Vorher wurde bei §23/§22 ein echter Verlust
   // auf 0 hochgezogen (floorAlways), wodurch z.B. -0,06 € aus lauter
   // kleinen USDC-Abgaengen faelschlich als "0,00 €" erschien.
-  const c23 = carryCalc(g23, c23in, false);
+  // §23/§22: Freigrenze wird VOR dem Verlustvortrag geprueft (BFH IX R
+  // 27/04). Darunter bleibt der Vortrag unverbraucht, darueber ist der
+  // gesamte Betrag steuerpflichtig und wird erst dann um den Vortrag
+  // gemindert. Die Werte kommen fertig aus tax.py (apply_freigrenze).
+  const fgCalc = (p, gross) => {
+    const usedCarry = N(p.carryUsed);
+    return {usedCarry, remainingCarry: N(p.carryRemaining),
+            headline: gross > 0 ? gross - usedCarry : gross,
+            exceeded: !!p.exceeded};
+  };
+  const c23 = fgCalc(y.par23, g23);
   const c20 = carryCalc(r20, c20in, false);
-  const c22 = carryCalc(r22, c22in, false);
+  const c22 = fgCalc(y.par22, r22);
 
   const breakdown = (label, gross, calc, yr) => calc.usedCarry > 0 ? `<div class="tx-breakdown">
       <div class="tbd-row"><span>${label} ${yr}</span><span>${eur(gross)}</span></div>
@@ -1042,7 +1052,7 @@ function taxPanel(){
 
   const remainingCarryNote = (calc) => calc.remainingCarry > 0 ? `<div class="tx-hint"
       style="margin-top:6px;color:var(--a22)">Verlustvortrag übrig: ${eur(calc.remainingCarry)}
-      (nicht verrechenbar über positive Einkünfte hinaus, für Folgejahre erneut eintragen)</div>` : "";
+      (für Folgejahre erneut eintragen)</div>` : "";
 
   const card23 = `<div class="taxcard" data-b="par23">
     <div class="tx-law">§ 23 EStG</div><div class="tx-name">Private Veräußerungsgeschäfte</div>
@@ -1050,13 +1060,15 @@ function taxPanel(){
     <div class="tx-amount" style="color:var(--fg)">${eur(c23.headline)}</div>
     ${c23.usedCarry>0?`<div class="tx-hint" style="margin-top:-8px">${
       c23.headline<=0?`steuerpflichtig für ${YEAR}: 0 €`:"verbleibender steuerpflichtiger Gewinn"}</div>`:""}
-    <div class="fg-bar ${c23.headline>fg23?"over":""}"><i style="width:${
-      Math.max(0,Math.min(100,c23.headline/fg23*100))}%"></i></div>
-    <div class="tx-hint">${c23.headline>fg23
-      ? `Freigrenze von ${eur(fg23)} überschritten – der <b>gesamte</b> Betrag ist steuerpflichtig.`
-      : c23.headline <= 0
+    <div class="fg-bar ${c23.exceeded?"over":""}"><i style="width:${
+      Math.max(0,Math.min(100,g23/fg23*100))}%"></i></div>
+    <div class="tx-hint">${c23.exceeded
+      ? `Freigrenze von ${eur(fg23)} überschritten – der <b>gesamte</b> Gewinn ist steuerpflichtig${
+          c23.usedCarry>0?" (nach Abzug des Verlustvortrags)":""}.`
+      : g23 <= 0
         ? `Kein steuerpflichtiger Gewinn. Die Freigrenze von ${eur(fg23)} ist unberührt.`
-        : `Noch ${eur(fg23-c23.headline)} bis zur Freigrenze von ${eur(fg23)}. Bleibt es darunter, fällt keine Steuer an.`}</div>
+        : `Noch ${eur(fg23-g23)} bis zur Freigrenze von ${eur(fg23)}. Bleibt es darunter, fällt keine Steuer an${
+            c23in>0?" und der Verlustvortrag bleibt unverbraucht":""}.`}</div>
     ${remainingCarryNote(c23)}
     <div class="tx-hint" style="margin-top:8px;color:var(--faint)">
       ${y.par23.count} steuerpflichtige, ${y.par23.countTaxFree} steuerfreie Veräußerungen</div>
@@ -1099,7 +1111,8 @@ function taxPanel(){
         :`steuerpflichtig für ${YEAR}: 0 €`}</div>`:""}
       <div class="fg-bar"><i style="width:${pctPausch}%"></i></div>
       <div class="tx-hint">${
-        r20<=0 ? "Echter Verlust des Jahres - kein Verlustvortrag oder Sparerpauschbetrag nötig."
+        r20===0 ? "Keine Termingeschäfte mit Ergebnis in diesem Jahr."
+        : r20<0 ? "Echter Verlust des Jahres - kein Verlustvortrag oder Sparerpauschbetrag nötig."
         : afterPausch>0 ? `Sparerpauschbetrag von ${eur(SPARERPAUSCHBETRAG)} ausgeschöpft. Steuerpflichtig: ${eur(afterPausch)}.`
         : `${eur(usedPausch)} von ${eur(SPARERPAUSCHBETRAG)} Sparerpauschbetrag genutzt. Steuerpflichtig für ${YEAR}: 0 €.`}</div>
 
@@ -1130,13 +1143,14 @@ function taxPanel(){
     <div class="tx-amount">${eur(c22.headline)}</div>
     ${c22.usedCarry>0?`<div class="tx-hint" style="margin-top:-8px">${
       c22.headline<=0?`steuerpflichtig für ${YEAR}: 0 €`:"verbleibendes steuerpflichtiges Ergebnis"}</div>`:""}
-    <div class="fg-bar ${c22.headline>fg22?"over":""}"><i style="width:${
-      Math.max(0,Math.min(100,c22.headline/fg22*100))}%"></i></div>
-    <div class="tx-hint">${c22.headline>fg22
-      ? `Freigrenze von ${eur(fg22)} überschritten.`
-      : c22.headline <= 0
+    <div class="fg-bar ${c22.exceeded?"over":""}"><i style="width:${
+      Math.max(0,Math.min(100,r22/fg22*100))}%"></i></div>
+    <div class="tx-hint">${c22.exceeded
+      ? `Freigrenze von ${eur(fg22)} überschritten – der gesamte Betrag ist steuerpflichtig.`
+      : r22 <= 0
         ? `Keine Einkünfte in diesem Topf. Die Freigrenze liegt bei ${eur(fg22)}.`
-        : `Noch ${eur(fg22-c22.headline)} bis zur Freigrenze von ${eur(fg22)}.`}</div>
+        : `Noch ${eur(fg22-r22)} bis zur Freigrenze von ${eur(fg22)}${
+            c22in>0?" – der Verlustvortrag bleibt unverbraucht":""}.`}</div>
     ${remainingCarryNote(c22)}
     ${!y.par22.allUnpriced && y.par22.unpriced > 0 ? `<div class="tx-hint"
       style="margin-top:8px;color:var(--a22)">${y.par22.unpriced} von ${y.par22.count}
@@ -1249,6 +1263,8 @@ function taxPanel(){
     ${blockers.length?`<div class="card" style="margin-bottom:12px">
       <div class="warn" style="margin:14px 20px"><b>Report noch nicht belastbar</b>
         ${blockers.map(esc).join("<br>")}</div></div>`:""}
+    ${(TAXR.notes||[]).length?`<div class="note" style="padding:0 20px 12px">${
+      TAXR.notes.map(esc).join("<br>")}</div>`:""}
     <div class="taxgrid">${card23}${card20}${card22}</div>
     ${carryCard}
     <div class="sect">Offene Bestände und Haltefristen</div>

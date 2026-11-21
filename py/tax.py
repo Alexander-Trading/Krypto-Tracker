@@ -27,7 +27,7 @@ import ledger as L
 FREIGRENZE_23 = {2023: Decimal(600), 2024: Decimal(1000)}   # ab 2024: 1.000
 FREIGRENZE_22 = Decimal(256)
 SPARERPAUSCHBETRAG = Decimal(1000)   # § 20 EStG / Anlage KAP, Einzelveranlagung
-HALTEFRIST_TAGE = 365
+HALTEFRIST_TAGE = 365   # nur noch als grobe Anzeigegroesse; massgeblich ist haltefrist_ende()
 
 # Als EUR-Gegenwert gilt 1:1 - der Euro ist die Bezugswaehrung.
 BASE = "EUR"
@@ -37,6 +37,57 @@ def freigrenze_23(year):
     if year >= 2024:
         return Decimal(1000)
     return Decimal(600)
+
+
+def haltefrist_ende(acquired):
+    """Letzter Tag der Jahresfrist (§ 23 Abs. 1 Nr. 2 EStG, § 108 AO,
+    §§ 187 Abs. 1, 188 Abs. 2 BGB): die Frist beginnt am Tag nach der
+    Anschaffung und endet mit Ablauf des Kalendertags im Folgejahr, der das
+    Datum der Anschaffung traegt. Ein Verkauf an diesem Tag ist noch
+    steuerpflichtig, erst ab dem Folgetag steuerfrei. Anschaffung am 29.2.:
+    das Folgejahr hat keinen 29.2., die Frist endet am 28.2. (§ 188 Abs. 3 BGB).
+
+    Fruehere Version: "steuerpflichtig, wenn weniger als 365 Tage" - das hat
+    einen Verkauf genau am Jahrestag (und in Schaltjahren schon am Vortag)
+    faelschlich als steuerfrei gewertet."""
+    from datetime import date
+    if isinstance(acquired, str):
+        acquired = date.fromisoformat(acquired[:10])
+    try:
+        return acquired.replace(year=acquired.year + 1)
+    except ValueError:            # 29.2. -> 28.2. des Folgejahres
+        return acquired.replace(year=acquired.year + 1, day=28)
+
+
+def innerhalb_haltefrist(acquired, sold):
+    """True = Veraeusserung innerhalb der Jahresfrist (steuerpflichtig)."""
+    from datetime import date
+    if isinstance(sold, str):
+        sold = date.fromisoformat(sold[:10])
+    return sold <= haltefrist_ende(acquired)
+
+
+def apply_freigrenze(gain, carry_in, freigrenze):
+    """Freigrenze (§ 23 Abs. 3 S. 5 bzw. § 22 Nr. 3 S. 2 EStG) und Verlust-
+    vortrag in der richtigen Reihenfolge: Die Freigrenze wird am Jahres-
+    ergebnis VOR dem Verlustabzug geprueft (BFH 11.1.2005, IX R 27/04,
+    BStBl II 2005, 433). Liegt das Ergebnis darunter, ist es steuerfrei und der
+    Vortrag bleibt unverbraucht. Liegt es darueber, ist der GESAMTE Betrag
+    steuerpflichtig und wird erst dann um den Vortrag gemindert - auch wenn
+    danach weniger als die Freigrenze uebrig bleibt.
+
+    Fruehere Version hat erst den Vortrag abgezogen und dann die Freigrenze
+    geprueft: 1.500 Gewinn / 800 Vortrag ergab 0 statt 700 steuerpflichtig,
+    und unter der Freigrenze wurde der Vortrag unnoetig verbraucht."""
+    exceeded = gain > freigrenze
+    used = min(carry_in, gain) if exceeded else Decimal(0)
+    return {
+        "exceeded": exceeded,
+        "carryUsed": used,
+        "carryRemaining": carry_in - used,
+        "afterCarry": gain - used,
+        "taxable": (gain - used) if exceeded else Decimal(0),
+    }
 
 
 def result_after_carry(raw, carry_in):
@@ -228,11 +279,54 @@ def build_lots(conn, table):
            FROM transactions t
            ORDER BY t.ts_utc, t.id""").fetchall()
 
+    transferred_out = []   # Auszahlungen auf eigene Wallets (keine Veraeusserung)
+
     for t in rows:
+        # Umbuchung zwischen eigenen Konten (Funding <-> Trading usw.): kein
+        # Steuerereignis. Die Coins bleiben dieselben, die Haltefrist laeuft
+        # weiter. Beide Seiten werden uebersprungen - frueher wurde die
+        # Abbuchung als Verkauf und die Gutschrift als Neukauf zum Tageskurs
+        # gerechnet (fiktiver Gewinn, Haltefrist neu gestartet). Da FIFO hier
+        # ueber alle Konten gemeinsam laeuft, aendert eine Umbuchung nichts
+        # an der Reihenfolge der Lots.
+        if t["tx_type"] == "transfer":
+            continue
+
         entries = conn.execute(
             "SELECT asset, amount, kind, eur_value FROM entries WHERE transaction_id = ?",
             (t["id"],)).fetchall()
         day = day_of(t["ts_utc"])
+
+        # Gebuehren eines Tauschs (§ 23): Anschaffungsnebenkosten beim Kauf,
+        # Veraeusserungskosten beim Verkauf (BMF 6.3.2025, Rz. 57 ff.).
+        # Frueher wurden EUR-Gebuehren komplett ignoriert und Coin-Gebuehren
+        # nur als Mini-Veraeusserung gebucht, ohne den Gewinn zu mindern.
+        # Eine in Krypto gezahlte Gebuehr bleibt zusaetzlich selbst eine
+        # Veraeusserung der Gebuehren-Coins (unten, wie bisher).
+        fee_eur = Decimal(0)
+        principal_out = [e for e in entries if e["kind"] == "principal"
+                         and e["asset"] != BASE and L.D(e["amount"]) < 0]
+        principal_in = [e for e in entries if e["kind"] == "principal"
+                        and e["asset"] != BASE and L.D(e["amount"]) > 0]
+        if t["tax_bucket"] == "par23" and t["tx_type"] == "trade_spot":
+            for e in entries:
+                if e["kind"] != "fee" or L.D(e["amount"]) == 0:
+                    continue
+                v = to_eur(table, e["asset"], day, abs(L.D(e["amount"])))
+                if v is None:
+                    warnings.append(
+                        f"Kein EUR-Kurs für die Gebühr in {e['asset']} am {day} – "
+                        "Gebühr mindert den Gewinn nicht.")
+                else:
+                    fee_eur += v
+        fee_on_sale = fee_eur if principal_out else Decimal(0)
+        fee_on_buy = fee_eur if (fee_eur and not principal_out and principal_in) else Decimal(0)
+
+        # Auszahlung nach aussen: als Uebertrag auf eine eigene Wallet
+        # behandelt (Regelfall: OKX -> Trezor), also keine Veraeusserung.
+        # Die Lots verlassen die OKX-Rechnung; auf der Wallet stehen sie
+        # ueber die Bestands-CSV mit ihren urspruenglichen Kaufdaten.
+        is_withdrawal = t["tx_type"] == "withdrawal"
 
         for e in entries:
             asset, amt = e["asset"], L.D(e["amount"])
@@ -251,6 +345,8 @@ def build_lots(conn, table):
                     warnings.append(
                         f"Kein EUR-Kurs für {asset} am {day} – Anschaffung "
                         "ohne Kostenbasis erfasst.")
+                elif fee_on_buy and e["kind"] == "principal":
+                    eur += fee_on_buy / len(principal_in)
                 lots.setdefault(asset, deque()).append({
                     "qty": amt, "cost_eur": eur, "day": day,
                     "ts": t["ts_utc"], "note": t["note"],
@@ -259,6 +355,9 @@ def build_lots(conn, table):
                 # Abgang: Lots in FIFO-Reihenfolge verbrauchen
                 need = -amt
                 q = lots.setdefault(asset, deque())
+                if (eur is not None and fee_on_sale
+                        and e["kind"] == "principal"):
+                    eur -= fee_on_sale / len(principal_out)
                 while need > 0 and q:
                     lot = q[0]
                     take = min(need, lot["qty"])
@@ -268,17 +367,22 @@ def build_lots(conn, table):
                     held = (datetime.fromisoformat(day)
                             - datetime.fromisoformat(lot["day"])).days
 
-                    disposals.append({
-                        "asset": asset, "qty": take,
-                        "acquired": lot["day"], "sold": day,
-                        "held_days": held,
-                        "taxable": held < HALTEFRIST_TAGE,
-                        "cost_eur": cost, "proceeds_eur": proceeds,
-                        "gain_eur": (proceeds - cost)
-                            if (proceeds is not None and cost is not None) else None,
-                        "year": year_of(t["ts_utc"]),
-                        "note": t["note"],
-                    })
+                    if is_withdrawal:
+                        transferred_out.append({
+                            "asset": asset, "qty": take,
+                            "acquired": lot["day"], "date": day})
+                    else:
+                        disposals.append({
+                            "asset": asset, "qty": take,
+                            "acquired": lot["day"], "sold": day,
+                            "held_days": held,
+                            "taxable": innerhalb_haltefrist(lot["day"], day),
+                            "cost_eur": cost, "proceeds_eur": proceeds,
+                            "gain_eur": (proceeds - cost)
+                                if (proceeds is not None and cost is not None) else None,
+                            "year": year_of(t["ts_utc"]),
+                            "note": t["note"],
+                        })
 
                     lot["qty"] -= take
                     if lot["cost_eur"] is not None:
@@ -287,10 +391,19 @@ def build_lots(conn, table):
                     if lot["qty"] <= 0:
                         q.popleft()
 
-                if need > 0:
+                if need > 0 and not is_withdrawal:
                     warnings.append(
                         f"Abgang von {need} {asset} am {day} ohne passenden "
                         "Zugang. Es fehlen ältere Daten.")
+
+    notes = []
+    if transferred_out:
+        n = len({(x["asset"], x["date"]) for x in transferred_out})
+        notes.append(
+            f"{n} Auszahlung(en) von OKX wurden als Übertrag auf eine eigene Wallet "
+            "behandelt (keine Veräußerung). Diese Coins müssen mit ihrem "
+            "ursprünglichen Kaufdatum in der Bestands-CSV der Wallet stehen. "
+            "War es eine Zahlung an Dritte, bitte als Veräußerung nachbuchen.")
 
     open_lots = []
     today = datetime.now(timezone.utc).date()
@@ -299,7 +412,7 @@ def build_lots(conn, table):
             if lot["qty"] <= 0:
                 continue
             acquired = datetime.fromisoformat(lot["day"]).date()
-            free_on = acquired + timedelta(days=HALTEFRIST_TAGE)
+            free_on = haltefrist_ende(acquired) + timedelta(days=1)
             open_lots.append({
                 "asset": asset, "qty": lot["qty"], "acquired": lot["day"],
                 "cost_eur": lot["cost_eur"],
@@ -310,7 +423,7 @@ def build_lots(conn, table):
                 "tax_free": today >= free_on,
             })
 
-    return disposals, sorted(open_lots, key=lambda x: x["acquired"]), warnings
+    return disposals, sorted(open_lots, key=lambda x: x["acquired"]), warnings, notes
 
 
 # --- Toepfe 20 und 22 ------------------------------------------------------
@@ -440,7 +553,7 @@ async def build_report(conn, fetcher=None):
     table, missing_rates, sources = await build_rate_lookup(
         conn, [], [], fetcher, pairs=pairs)
 
-    disposals, open_lots, warn = build_lots(conn, table)
+    disposals, open_lots, warn, notes = build_lots(conn, table)
 
     # Offene Lots mit aktuellem Wert: zeigt je Kauf, was er heute wert ist.
     today = _today_utc()
@@ -479,22 +592,22 @@ async def build_report(conn, fetcher=None):
         rows22 = bucket_rows(conn, "par22", y, table)
         all_by_bucket = {b: bucket_rows(conn, b, y, table) for b in ALL_BUCKETS}
 
-        # Manueller Verlustvortrag: mindert den Gewinn/das Ergebnis des Jahres,
-        # bevor Freigrenze bzw. Steuerpflicht geprueft wird. Keine automatische
-        # Fortschreibung - was nicht verbraucht wird, muss im Folgejahr erneut
-        # eingetragen werden.
+        # Manueller Verlustvortrag (keine automatische Fortschreibung). Bei
+        # § 23/§ 22 erst Freigrenze pruefen, dann Vortrag - siehe
+        # apply_freigrenze().
         c23 = carry.get((y, "par23"), {}).get("amount", Decimal(0))
         c20 = carry.get((y, "par20"), {}).get("amount", Decimal(0))
         c22 = carry.get((y, "par22"), {}).get("amount", Decimal(0))
-        # result_after_carry statt einfacher Subtraktion: ein echter Verlust
-        # bleibt unveraendert sichtbar, statt mit einem u.U. viel groesseren
-        # alten Verlustvortrag zu einer irrefuehrenden Zahl verrechnet zu
-        # werden (nur ein Gewinn wird durch den Vortrag gemindert).
-        gain_after = result_after_carry(gain, c23)
-        r20_after = result_after_carry(r20, c20)
+        fg23 = apply_freigrenze(gain, c23, fg)
+        fg22 = apply_freigrenze(sum22, c22, FREIGRENZE_22)
+        gain_after = fg23["afterCarry"]
+        sum22_after = fg22["afterCarry"]
+        # § 20: Sparerpauschbetrag ist ein Freibetrag, keine Freigrenze -
+        # hier ist "erst Verlustvortrag, dann Pauschbetrag" richtig.
+        used20 = min(c20, r20) if r20 > 0 else Decimal(0)
+        r20_after = r20 - used20
         r20_taxable = (max(r20_after - SPARERPAUSCHBETRAG, Decimal(0))
                       if r20 >= 0 else r20_after)
-        sum22_after = result_after_carry(sum22, c22)
 
         out_years.append({
             "year": y,
@@ -502,17 +615,21 @@ async def build_report(conn, fetcher=None):
                 "gain": gain,
                 "lossCarryIn": c23,
                 "gainAfterCarry": gain_after,
+                "carryUsed": fg23["carryUsed"],
+                "carryRemaining": fg23["carryRemaining"],
                 "count": len(d_y),
                 "countTaxFree": len(d_free),
                 "freigrenze": fg,
-                "exceeded": gain_after > fg,
-                "taxable": gain_after if gain_after > fg else Decimal(0),
+                "exceeded": fg23["exceeded"],
+                "taxable": fg23["taxable"],
                 "disposals": [d for d in disposals if d["year"] == y],
             },
             "par20": {
                 "result": r20,
                 "lossCarryIn": c20,
                 "resultAfterCarry": r20_after,
+                "carryUsed": used20,
+                "carryRemaining": c20 - used20,
                 "sparerpauschbetrag": SPARERPAUSCHBETRAG,
                 "exceeded": r20 >= 0 and r20_after > SPARERPAUSCHBETRAG,
                 "taxable": r20_taxable,
@@ -528,14 +645,16 @@ async def build_report(conn, fetcher=None):
                 "result": sum22,
                 "lossCarryIn": c22,
                 "resultAfterCarry": sum22_after,
+                "carryUsed": fg22["carryUsed"],
+                "carryRemaining": fg22["carryRemaining"],
                 "native": e22["native"] if e22 else {},
                 "count": len(rows22),
                 "unpriced": e22["unpriced"] if e22 else 0,
                 "allUnpriced": bool(e22) and e22["unpriced"] > 0
                               and e22["unpriced"] == e22["rows"],
                 "freigrenze": FREIGRENZE_22,
-                "exceeded": sum22_after > FREIGRENZE_22,
-                "taxable": sum22_after if sum22_after > FREIGRENZE_22 else Decimal(0),
+                "exceeded": fg22["exceeded"],
+                "taxable": fg22["taxable"],
                 "rows": rows22,
             },
             "allByBucket": all_by_bucket,
@@ -548,6 +667,7 @@ async def build_report(conn, fetcher=None):
         "years": out_years,
         "openLots": open_lots,
         "warnings": warn,
+        "notes": notes,
         "missingRates": missing_rates[:20],
         "missingRatesCount": len(missing_rates),
         "rateSources": {**sources, **now_sources},
