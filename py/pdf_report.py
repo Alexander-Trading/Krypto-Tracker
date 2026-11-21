@@ -418,6 +418,18 @@ class _NumberedCanvas(Canvas):
         self.line(18 * mm, 13.5 * mm, w - 18 * mm, 13.5 * mm)
 
 
+def _kv_table(styles, lines):
+    t = Table([[Paragraph(l, styles["cell"]), Paragraph(v, styles["cellNum"])] for l, v in lines],
+              colWidths=[125 * mm, 45 * mm])
+    t.setStyle(TableStyle([
+        ("ALIGN", (1, 0), (1, -1), "RIGHT"),
+        ("LINEBELOW", (0, 0), (-1, -1), 0.4, LINE),
+        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 0), ("RIGHTPADDING", (0, 0), (-1, -1), 0),
+    ]))
+    return t
+
+
 def build_pdf(report, year, meta_text) -> bytes:
     styles = _styles()
     buf = BytesIO()
@@ -431,6 +443,49 @@ def build_pdf(report, year, meta_text) -> bytes:
     flow.append(PageBreak())
 
     y = next(v for v in report["years"] if v["year"] == year)
+
+    # Werte fuer die Steuererklaerung und Rechenweg (BMF 6.3.2025:
+    # Verwendungsreihenfolge, Kurse und Zeitpunkte offenlegen).
+    dc = y.get("declaration")
+    if dc:
+        flow.append(Paragraph(f"Werte für die Steuererklärung {year}", styles["h2"]))
+        flow.append(Spacer(1, 4))
+        def block(title, lines, hint=None):
+            flow.append(Paragraph(title, styles["potname"]))
+            flow.append(Spacer(1, 3))
+            flow.append(_kv_table(styles, lines))
+            if hint:
+                flow.append(Spacer(1, 2))
+                flow.append(Paragraph(hint, styles["note"]))
+            flow.append(Spacer(1, 10))
+        so = dc["so23"]
+        block(so["label"], [
+            (f"Veräußerungspreis ({so['count']} steuerpflichtige Abgänge)", _money(so["proceeds"])),
+            ("Anschaffungskosten", _money(so["cost"])),
+            ("Werbungskosten", _money(so["werbungskosten"])),
+            ("Gewinn/Verlust", _money(so["gain"])),
+            ("Freigrenze", "überschritten" if so["freigrenzeExceeded"] else "nicht überschritten"),
+        ], so["hint"])
+        s22 = dc["so22"]
+        block(s22["label"], [
+            ("Einnahmen", _money(s22["income"])),
+            ("Werbungskosten", _money(s22["werbungskosten"])),
+            ("Einkünfte", _money(s22["result"])),
+            ("Freigrenze 256 €", "überschritten" if s22["freigrenzeExceeded"] else "nicht überschritten"),
+        ])
+        k = dc["kap20"]
+        block(k["label"], [
+            ("Gewinne aus Termingeschäften", _money(k["gains"])),
+            ("Verluste aus Termingeschäften", _money(k["losses"])),
+            ("Saldo", _money(k["result"])),
+        ], k["hint"])
+    if report.get("methodology"):
+        flow.append(Paragraph("Rechenweg und Methoden", styles["h2"]))
+        flow.append(Spacer(1, 4))
+        for m in report["methodology"]:
+            flow.append(Paragraph("• " + m, styles["note"]))
+            flow.append(Spacer(1, 2))
+    flow.append(PageBreak())
 
     # Eine einzige Buchungsliste je Steuertopf (vorher gab es die Liste
     # zweimal: einmal "gruppiert" und nochmal als "Anhang" - identischer

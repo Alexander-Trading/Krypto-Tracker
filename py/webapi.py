@@ -23,6 +23,7 @@ from decimal import Decimal
 import ledger as L
 import market as MK
 import tax as TAX
+import checks as CHK
 import okx_import as IMP
 
 try:
@@ -241,6 +242,9 @@ async def _route_get(path, query, conn):
     if path == "/api/journal":
         return await TAX.journal(conn, fetcher=MK.eur_rate_on)
 
+    if path == "/api/checks":
+        return CHK.overview(conn)
+
     if path == "/api/fees":
         return TAX.fees_summary(conn)
 
@@ -350,6 +354,20 @@ async def _route_post(path, body, conn):
         return {"items": [dict(r) for r in conn.execute(
             "SELECT year, bucket, amount_eur, note FROM loss_carryforward "
             "ORDER BY year DESC, bucket")]}
+
+    if path == "/api/actual-balances":
+        CHK.set_actual_balances(conn, okx=body.get("okx"), wallet=body.get("wallet"))
+        return CHK.overview(conn)
+
+    if path == "/api/flow-mode":
+        CHK.set_flow_mode(conn, int(body["id"]), body["mode"])
+        return {"ok": True, "overview": CHK.overview(conn), "state": build_state(conn)}
+
+    if path == "/api/simulate":
+        return await TAX.simulate_sale(
+            conn, body.get("asset"), qty=body.get("qty"), price_eur=body.get("price"),
+            sale_date=body.get("date") or None, fetcher=MK.eur_rate_on,
+            tax_rate=body.get("taxRate"))
 
     if path == "/api/tx-update":
         L.update_transaction(

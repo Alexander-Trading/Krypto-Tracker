@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "py"))
-import ledger as L, okx_import as IMP, tax as TAX, webapi as W
+import ledger as L, okx_import as IMP, tax as TAX, webapi as W, checks as CHK
 
 CSV = """Datum,Asset,Menge,EUR-Kosten,Herkunft
 2021-01-10,BTC,0.5,10000.00,Testboerse A
@@ -123,6 +123,7 @@ async def main():
 
     # --- Steuerkorrekturen 21.11.2026 -----------------------------------
     await steuer_korrekturen()
+    await neue_funktionen()
     print("ALLE TESTS OK")
 
 
@@ -228,6 +229,100 @@ async def steuer_korrekturen():
     d, o, w, n = TAX.build_lots(c, {("USDC", "2025-01-10"): D(1), ("USDC", "2025-02-10"): D(1)})
     assert len(d) == 1 and d[0]["gain_eur"] == 0, d
     print("Steuerkorrekturen OK")
+
+
+async def neue_funktionen():
+    D = Decimal
+    RATES = {"BTC": D(50000), "USDC": D("0.9")}
+    async def fx(asset, day):
+        return RATES.get(asset)
+
+    def base():
+        c = fresh()
+        _tx(c, "2025-01-10T10:00:00Z", "trade_spot", "trading", "par23",
+            [L.Entry("EUR", "-1000"), L.Entry("BTC", "0.02")], "buy")
+        _tx(c, "2025-02-01T10:00:00Z", "withdrawal", "funding", "neutral",
+            [L.Entry("BTC", "-0.01")], "wd")
+        return c
+
+    def wd_id(c):
+        return c.execute("SELECT id FROM transactions WHERE external_id='wd'").fetchone()[0]
+
+    # Umbuchung auf Trezor mit Kaufdaten: Lots bleiben, Trezor-Bestand entsteht
+    c = base()
+    fl = CHK.flows(c)
+    assert len(fl) == 1 and fl[0]["mode"] == "csv", fl
+    CHK.set_flow_mode(c, wd_id(c), "carry")
+    assert L.balances(c, account="wallet") == {"BTC": D("0.01")}
+    d, o, w, n = TAX.build_lots(c, {("BTC", "2025-01-10"): D(50000)})
+    assert d == [] and sum(l["qty"] for l in o) == D("0.02") and not n, (d, o, n)
+    assert all(l["acquired"] == "2025-01-10" for l in o)
+    assert CHK.flows(c)[0]["mode"] == "carry"
+    # zurueck auf Standard: Gegenbuchung weg, Auszahlung wieder Auszahlung
+    CHK.set_flow_mode(c, wd_id(c), "csv")
+    assert "BTC" not in L.balances(c, account="wallet")
+    assert c.execute("SELECT tx_type FROM transactions WHERE external_id='wd'").fetchone()[0] == "withdrawal"
+
+    # Zahlung an Dritte: Veraeusserung
+    c = base()
+    CHK.set_flow_mode(c, wd_id(c), "third")
+    d, o, w, n = TAX.build_lots(c, {("BTC", "2025-01-10"): D(50000), ("BTC", "2025-02-01"): D(60000)})
+    assert len(d) == 1 and d[0]["gain_eur"] == D(100) and d[0]["taxable"], d
+
+    # Einzahlung von der Trezor: Kaufdaten aus der Bestands-CSV bleiben
+    c = fresh()
+    IMP.import_wallet_lots(c, "Datum,Asset,Menge,EUR-Kosten\n2021-01-10,BTC,0.5,10000\n", "t.csv")
+    _tx(c, "2025-03-01T10:00:00Z", "deposit", "funding", "neutral", [L.Entry("BTC", "0.5")], "dep")
+    dep = c.execute("SELECT id FROM transactions WHERE external_id='dep'").fetchone()[0]
+    CHK.set_flow_mode(c, dep, "carry")
+    d, o, w, n = TAX.build_lots(c, {})
+    assert len(o) == 1 and o[0]["acquired"] == "2021-01-10" and o[0]["cost_eur"] == D(10000), o
+    assert L.balances(c) == {"BTC": D("0.5")} and "BTC" not in L.balances(c, account="wallet")
+
+    # Saldo-Abgleich
+    c = base()
+    CHK.set_actual_balances(c, okx={"btc": "0.01"}, wallet={"BTC": "0.009"})
+    bc = CHK.balance_check(c)
+    row = next(r for r in bc["rows"] if r["asset"] == "BTC")
+    assert row["okx"]["ok"] is True and row["wallet"]["ok"] is False, row
+    assert bc["mismatches"] == 1
+
+    # Pruefungen: negativer Bestand und Doppelbuchung
+    c = fresh()
+    _tx(c, "2025-01-10T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("EUR", "1000"), L.Entry("BTC", "-0.02")], "x1")
+    _tx(c, "2025-01-11T10:00:00Z", "fee", "trading", "par23", [L.Entry("BTC", "-0.001", "fee")], "x2")
+    L.add_transaction(c, L.Transaction(ts_utc="2025-01-11T10:00:00Z", tx_type="fee",
+        account="trading", tax_bucket="par23", source="manual", external_id="x3",
+        entries=[L.Entry("BTC", "-0.001", "fee")]))
+    kinds = {i["kind"] for i in CHK.data_checks(c)}
+    assert {"negative", "duplicate"} <= kinds, kinds
+
+    # Erklaerungswerte und Rechenweg im Report
+    c = fresh()
+    _tx(c, "2025-01-10T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("EUR", "-1000"), L.Entry("BTC", "0.02")], "a")
+    _tx(c, "2025-03-10T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("EUR", "1500"), L.Entry("BTC", "-0.02")], "b")
+    rep = await TAX.build_report(c, fetcher=None)
+    so = next(y for y in rep["years"] if y["year"] == 2025)["declaration"]["so23"]
+    assert D(so["proceeds"]) == D(1500) and D(so["cost"]) == D(1000) and D(so["gain"]) == D(500), so
+    assert len(rep["methodology"]) >= 5
+
+    # Verkaufs-Simulator
+    c = fresh()
+    IMP.import_wallet_lots(c, "Datum,Asset,Menge,EUR-Kosten\n2025-01-10,BTC,0.01,500\n"
+                           "2025-06-10,BTC,0.01,700\n", "t.csv")
+    sim = await TAX.simulate_sale(c, "BTC", qty="0.015", price_eur="100000",
+                                  sale_date="2026-03-01", fetcher=None, tax_rate="42")
+    assert D(sim["taxFreeGain"]) == D(500) and D(sim["taxableGain"]) == D(150), sim
+    assert sim["waits"][0]["date"] == "2026-06-11", sim["waits"]
+    assert D(sim["extraTaxable"]) == 0 and not sim["exceededAfter"], sim   # 150 < Freigrenze
+    sim = await TAX.simulate_sale(c, "BTC", qty=None, price_eur="200000",
+                                  sale_date="2026-03-01", fetcher=None, tax_rate="42")
+    assert D(sim["taxableGain"]) == D(1300) and sim["exceededAfter"]
+    assert D(sim["taxEstimate"]) == D(1300) * D("0.42"), sim
+    print("Neue Funktionen OK")
 
 
 asyncio.run(main())

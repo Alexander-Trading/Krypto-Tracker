@@ -83,6 +83,19 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .td-row .td-v.pos{color:var(--up)} .td-row .td-v.neg{color:var(--down)}
 .td-row.free{opacity:.6}
 .td-more{display:block;margin:12px auto 0}
+.decl .decl-h{padding:14px 20px 4px;font-size:13px;font-weight:600}
+.decl .decl-n{padding:0 20px 6px}
+.decl{padding-bottom:10px}
+.meth{padding:14px 20px;margin-top:12px}
+.meth summary{cursor:pointer;font-size:13.5px;font-weight:500}
+.meth ul{margin:10px 0 0;padding-left:18px;font-size:12.5px;color:var(--dim);line-height:1.55}
+.meth li{margin:4px 0}
+.sim-f{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;padding:16px 20px;align-items:end}
+.sim-f label{display:flex;flex-direction:column;gap:5px;font-size:12px;color:var(--dim)}
+.sim-f .mini,.sim-f select{width:100%;box-sizing:border-box}
+.sim-f select{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radius:8px;
+  border:1px solid var(--line-2);background:var(--bg);color:var(--fg)}
+#simOut .td-sum{padding-top:0}
 .ovhead{display:flex;align-items:center;justify-content:space-between;margin:6px 0 22px}
 .ovhead h2{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0}
 .ovclose{width:40px;height:40px;border-radius:50%;border:none;background:none;
@@ -129,6 +142,13 @@ button{-webkit-tap-highlight-color:transparent}
   gap:10px 16px;align-items:center}
 .rvrow:first-child{border-top:none}
 .rvinfo{flex:1 1 220px;min-width:0}
+.chk-d{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.5;margin-top:4px}
+#chkWrap .note-s{white-space:normal;overflow:visible}
+.bc-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:7px;font-size:12.5px}
+.bc-l{width:52px;color:var(--dim)}
+.bc-led{font-family:var(--mono);font-size:11.5px;color:var(--faint);min-width:120px}
+.bc-st{font-family:var(--mono);font-size:11.5px}
+.bc-st .pos{color:var(--up)} .bc-st .neg{color:var(--down)}
 .rvctl{display:flex;gap:8px;align-items:center;flex:0 0 auto}
 .rvctl select{background:var(--panel-2);border:1px solid var(--line);color:var(--fg);
   border-radius:8px;padding:7px 10px;font-family:var(--sans);font-size:12.5px}
@@ -522,6 +542,27 @@ const TXL = {deposit:"Einzahlung",withdrawal:"Auszahlung",transfer:"Umbuchung",
   trade_spot:"Tausch",trade_derivative:"Futures",funding_fee:"Finanzierungsrate",
   fee:"Gebühr",earn_reward:"Earn-Gutschrift",adjustment:"Korrektur"};
 const ORDER = ["unknown","par23","par20","par22","neutral"];
+
+/* Selbst-Update: Safari und das Homescreen-Symbol halten index.html im
+   Zwischenspeicher (die py-Dateien werden dagegen immer frisch geladen).
+   Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
+   andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
+   WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
+const APP_BUILD="2026-11-21.4";
+(async function selfUpdate(){
+  try{
+    const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
+    const txt = await (await fetch(url, {cache:"no-store"})).text();
+    const m = txt.match(/const APP_BUILD="([^"]+)"/);
+    if(!m || m[1] === APP_BUILD) return;
+    const key = "kt-upd-" + m[1];
+    let tried = false;
+    try{ tried = !!sessionStorage.getItem(key); sessionStorage.setItem(key, "1"); }catch(e){}
+    if(tried) return;                       // nie in eine Endlosschleife laufen
+    const next = new URL(location.href); next.searchParams.set("v", m[1]);
+    location.replace(next.toString());
+  }catch(e){ /* offline: einfach mit der vorhandenen Version weiter */ }
+})();
 
 let STATE=null, MARKET=null, PF=null, TAXR=null, FEES=null, TAB="dash", YEAR=null;
 let TXQ={bucket:"",q:"",offset:0,limit:60}, TXD=null;
@@ -932,10 +973,125 @@ const TYPE_OPTS = ["deposit","withdrawal","transfer","trade_spot","trade_derivat
   "funding_fee","fee","earn_reward","adjustment"];
 
 function reviewPanel(){
-  return `<div class="card" id="reviewCard"><div class="empty"><p>Lade…</p></div></div>`;
+  return `<div id="chkWrap"><div class="card"><div class="empty"><p>Prüfe Daten…</p></div></div></div>
+    <div class="sect">Unklare Buchungen</div>
+    <div class="card" id="reviewCard"><div class="empty"><p>Lade…</p></div></div>`;
+}
+
+/* ----- Datenpruefung, Saldo-Abgleich, Ein-/Auszahlungen ----- */
+let CHKD = null;
+const FLOW_OPTS = {
+  withdrawal: [["csv","Auf Trezor – steht in Bestands-CSV"],
+               ["carry","Auf Trezor – Kaufdaten übernehmen"],
+               ["third","Zahlung an Dritte (Veräußerung)"]],
+  deposit:    [["external","Zugang von außen (Tageskurs)"],
+               ["carry","Von Trezor – Kaufdaten übernehmen"]],
+};
+
+async function loadChecks(){
+  const el = $("#chkWrap"); if(!el) return;
+  try{ CHKD = await api("/api/checks"); }
+  catch(e){ el.innerHTML = `<div class="card"><div class="empty"><p>Prüfung fehlgeschlagen: ${
+    esc(String(e.message||e))}</p></div></div>`; return; }
+  renderChecks();
+}
+
+function renderChecks(){
+  const el = $("#chkWrap"); if(!el || !CHKD) return;
+  const iss = CHKD.checks || [];
+  const issHtml = iss.length ? iss.map(i=>`<div class="rvrow"><div class="rvinfo">
+      <div class="title"><span class="tag" data-b="${i.level==="warn"?"unknown":"neutral"}">${
+        i.level==="warn"?"Achtung":"Hinweis"}</span> ${esc(i.title)}</div>
+      <div class="note-s chk-d">${esc(i.detail)}</div></div></div>`).join("")
+    : `<div class="empty" style="padding:28px 20px"><h3>Keine Auffälligkeiten</h3>
+       <p>Keine negativen Bestände, keine Doppelbuchungen, alle Umbuchungen mit Gegenstück.</p></div>`;
+
+  const bc = CHKD.balances || {rows:[]};
+  const cell = (r, key, label) => {
+    const c = r[key]; const led = N(c.ledger);
+    const st = c.ok==null ? "" : c.ok ? `<span class="pos">✓ stimmt</span>`
+      : `<span class="neg">Abweichung ${sgn(c.diff)}</span>`;
+    if(key==="wallet" && r.asset==="EUR" && !led && c.actual==null) return "";
+    return `<div class="bc-line"><span class="bc-l">${label}</span>
+      <span class="bc-led">Tracker ${nfTrim(led)}</span>
+      <input class="mini bc-in" inputmode="decimal" data-k="${key}" data-a="${esc(r.asset)}"
+        value="${c.actual!=null?nfTrim(c.actual):""}" placeholder="Ist">
+      <span class="bc-st">${st}</span></div>`;
+  };
+  const bcHtml = `<div class="note" style="padding:12px 20px 4px">Trage die tatsächlichen Bestände ein:
+      OKX-App → Assets, je Coin der Gesamtbestand (Funding + Trading + Earn), und Trezor Suite.
+      Leer lassen, was du nicht prüfen willst. Unrealisierte Futures-Gewinne zeigt OKX im Bestand,
+      der Tracker erst nach dem Schließen.</div>
+    ${bc.rows.map(r=>`<div class="rvrow bc-row"><div class="rvinfo">
+      <div class="title">${esc(r.asset)}</div>${cell(r,"okx","OKX")}${cell(r,"wallet","Trezor")}</div></div>`).join("")}
+    <div class="rvrow"><div class="rvinfo"><div class="bc-line"><span class="bc-l">Weiterer Coin</span>
+      <input class="mini" id="bcNewAsset" placeholder="z. B. ETH" style="width:90px">
+      <input class="mini" id="bcNewOkx" inputmode="decimal" placeholder="OKX">
+      <input class="mini" id="bcNewWal" inputmode="decimal" placeholder="Trezor"></div></div></div>
+    <div style="padding:12px 20px 16px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <button class="act" id="bcSave">Abgleichen</button>
+      <span class="note-s">${bc.asOf?`zuletzt ${dtm(bc.asOf)} · ${bc.checked} geprüft, ${
+        bc.mismatches} Abweichung(en)`:"noch kein Abgleich"}</span></div>`;
+
+  const fl = CHKD.flows || [];
+  const flHtml = fl.length ? `<div class="note" style="padding:12px 20px 4px">„Kaufdaten übernehmen“ nur wählen,
+      wenn diese Coins <b>nicht</b> schon in der Bestands-CSV der Trezor stehen – sonst wären sie doppelt.
+      Der Saldo-Abgleich oben zeigt, ob es aufgeht.</div>
+    ${fl.map(f=>`<div class="rvrow" data-flow="${f.id}"><div class="rvinfo">
+      <div class="title">${f.direction==="withdrawal"?"Auszahlung von OKX":"Einzahlung zu OKX"}
+        <span class="mono" style="color:var(--faint);font-size:11px">${dtm(f.ts)}</span></div>
+      <div class="note-s">${f.entries.map(e=>`${nfx(e.amount)} ${esc(e.asset)}`).join(" · ")}</div></div>
+      <div class="rvctl"><select class="flow-mode">${FLOW_OPTS[f.direction].map(([v,l])=>
+        `<option value="${v}" ${v===f.mode?"selected":""}>${l}</option>`).join("")}</select>
+        <span class="carrysaved hidden">gespeichert</span></div></div>`).join("")}`
+    : `<div class="empty" style="padding:28px 20px"><p>Keine Krypto-Ein- oder Auszahlungen bei OKX.</p></div>`;
+
+  el.innerHTML = `<div class="sect">Datenprüfung</div><div class="card">${issHtml}</div>
+    <div class="sect">Saldo-Abgleich</div><div class="card">${bcHtml}</div>
+    <div class="sect">Ein- und Auszahlungen</div><div class="card">${flHtml}</div>`;
+  wireChecks();
+}
+
+// Zahleneingabe: "1.234,56" / "0,5" (deutsch) oder "0.5" (Punkt) -> "1234.56"
+function numIn(x){
+  x = String(x||"").trim().replace(/\s/g,"").replace(/€/g,"");
+  if(x.includes(",")) x = x.replace(/\./g,"").replace(",", ".");
+  return x;
+}
+
+function wireChecks(){
+  const save = $("#bcSave");
+  if(save) save.onclick = async ()=>{
+    const okx = {}, wallet = {};
+    document.querySelectorAll(".bc-in").forEach(i=>{
+      (i.dataset.k==="okx"?okx:wallet)[i.dataset.a] = i.value.trim()==="" ? "" : numIn(i.value);
+    });
+    const na = $("#bcNewAsset").value.trim().toUpperCase();
+    if(na){
+      if($("#bcNewOkx").value.trim()) okx[na] = numIn($("#bcNewOkx").value);
+      if($("#bcNewWal").value.trim()) wallet[na] = numIn($("#bcNewWal").value);
+    }
+    for(const d of [okx, wallet]) for(const [k,v] of Object.entries(d))
+      if(v!=="" && Number.isNaN(Number(v))){ alert(`„${k}“: keine gültige Zahl.`); return; }
+    save.disabled = true; save.textContent = "Prüfe…";
+    try{ CHKD = await api("/api/actual-balances", {okx, wallet}); renderChecks(); }
+    catch(e){ alert("Das hat nicht geklappt: " + (e.message||e)); save.disabled=false; save.textContent="Abgleichen"; }
+  };
+  document.querySelectorAll("[data-flow]").forEach(row=>{
+    const sel = row.querySelector(".flow-mode");
+    sel.onchange = async ()=>{
+      sel.disabled = true;
+      try{
+        const r = await api("/api/flow-mode", {id: +row.dataset.flow, mode: sel.value});
+        STATE = r.state; PF = TAXR = null; CHKD = r.overview;
+        renderChecks(); refreshDerived();
+      }catch(e){ alert("Das hat nicht geklappt: " + (e.message||e)); sel.disabled = false; }
+    };
+  });
 }
 
 async function loadReview(){
+  loadChecks();
   const el = $("#reviewCard"); if(!el) return;
   try{
     REVIEWD = await api("/api/transactions?bucket=unknown&limit=200");
@@ -1186,6 +1342,52 @@ function taxPanel(){
       ${y.par22.count} Buchungen</div>
   </div>`;
 
+  // Werte fuer die Steuererklaerung (Anlage SO / KAP) und Rechenweg
+  const dc = y.declaration || null;
+  const dl = (l, v, cls) => `<div class="tbd-row ${cls||""}"><span>${l}</span><span>${v}</span></div>`;
+  const declCard = dc ? `<div class="sect">Für die Steuererklärung ${YEAR}</div>
+    <div class="card decl">
+      <div class="decl-h">${esc(dc.so23.label)}</div>
+      <div class="td-sum">
+        ${dl(`Veräußerungspreis (${dc.so23.count} steuerpflichtige Abgänge)`, eur(dc.so23.proceeds))}
+        ${dl("Anschaffungskosten", eur(dc.so23.cost))}
+        ${dl("Werbungskosten", eur(dc.so23.werbungskosten))}
+        ${dl("Gewinn/Verlust", eur(dc.so23.gain), "total")}
+        ${dl("Freigrenze", dc.so23.freigrenzeExceeded ? "überschritten" : "nicht überschritten – steuerfrei")}
+        ${N(dc.so23.carryUsed)>0 ? dl("Verlustvortrag (Abzug durchs Finanzamt)", "−"+eur(dc.so23.carryUsed)) : ""}
+      </div>
+      <div class="note-s decl-n">${esc(dc.so23.hint)}${dc.so23.unpriced?` · ${dc.so23.unpriced} Abgänge ohne Kurs nicht enthalten.`:""}</div>
+      <div class="decl-h">${esc(dc.so22.label)}</div>
+      <div class="td-sum">
+        ${dl("Einnahmen", eur(dc.so22.income))}
+        ${dl("Werbungskosten", eur(dc.so22.werbungskosten))}
+        ${dl("Einkünfte", eur(dc.so22.result), "total")}
+        ${dl("Freigrenze 256 €", dc.so22.freigrenzeExceeded ? "überschritten" : "nicht überschritten – steuerfrei")}
+      </div>
+      <div class="decl-h">${esc(dc.kap20.label)}</div>
+      <div class="td-sum">
+        ${dl("Gewinne aus Termingeschäften", eur(dc.kap20.gains))}
+        ${dl("Verluste aus Termingeschäften", eur(dc.kap20.losses))}
+        ${dl("Saldo (Kapitalerträge)", eur(dc.kap20.result), "total")}
+      </div>
+      <div class="note-s decl-n">${esc(dc.kap20.hint)}</div>
+    </div>
+    <details class="card meth"><summary>Rechenweg und Methoden</summary>
+      <ul>${(TAXR.methodology||[]).map(m=>`<li>${esc(m)}</li>`).join("")}</ul></details>` : "";
+
+  // Verkaufs-Simulator: Coins aus den offenen Bestaenden
+  const simAssets = [...new Set((TAXR.openLots||[]).map(l=>l.asset))].sort();
+  const simCard = simAssets.length ? `<div class="sect">Verkauf simulieren</div>
+    <div class="card" id="simCard"><div class="sim-f">
+      <label>Coin<select id="simAsset">${simAssets.map(a=>
+        `<option ${a===SIM.asset?"selected":""}>${esc(a)}</option>`).join("")}</select></label>
+      <label>Menge<input class="mini" id="simQty" inputmode="decimal" placeholder="alles" value="${esc(SIM.qty||"")}"></label>
+      <label>Preis €/Stück<input class="mini" id="simPrice" inputmode="decimal" placeholder="aktuell" value="${esc(SIM.price||"")}"></label>
+      <label>Verkaufsdatum<input class="mini" id="simDate" type="date" value="${esc(SIM.date||"")}"></label>
+      <label>Steuersatz %<input class="mini" id="simRate" inputmode="decimal" placeholder="z. B. 42" value="${esc(SIM.rate||"")}"></label>
+      <button class="act" id="simGo">Berechnen</button>
+    </div><div id="simOut">${SIM.html||""}</div></div>` : "";
+
   const carryRow = (bucket, label, val) => `<div class="carryrow" data-bucket="${bucket}">
     <label>${label}</label>
     <input type="text" class="carry-input" value="${val>0?nf(val):""}" placeholder="0,00">
@@ -1293,7 +1495,9 @@ function taxPanel(){
     ${(TAXR.notes||[]).length?`<div class="note" style="padding:0 20px 12px">${
       TAXR.notes.map(esc).join("<br>")}</div>`:""}
     <div class="taxgrid">${card23}${card20}${card22}</div>
+    ${declCard}
     ${carryCard}
+    ${simCard}
     <div class="sect">Offene Bestände und Haltefristen</div>
     <div class="note" style="padding:0 20px 10px">Je Asset zusammengefasst - der nächste
       Zukauf, der steuerfrei wird, bestimmt den Balken (FIFO: ältester Rest zuerst). Die
@@ -1709,6 +1913,7 @@ function managePosAutoRefresh(){
 
 function wireTax(){
   document.querySelectorAll(".ychip").forEach(c=>c.onclick=()=>{YEAR=+c.dataset.y;render();});
+  wireSim();
   document.querySelectorAll(".taxcard[data-b]").forEach(card=>{
     if(!card.querySelector(".tx-more"))
       card.insertAdjacentHTML("beforeend", `<div class="tx-more">Buchungen anzeigen ›</div>`);
@@ -1930,6 +2135,55 @@ async function handleLotsFile(f){
     $("#impLotsResult").innerHTML=`<div class="card" style="margin-top:12px">
       <div class="warn"><b>Das hat nicht geklappt</b>${esc(e.message||e)}</div></div>`;
   }
+}
+
+/* ===== Verkaufs-Simulator ===== */
+let SIM = {asset:null, qty:"", price:"", date:"", rate:"", html:""};
+try{ SIM.rate = localStorage.getItem("kt-sim-rate") || ""; }catch(e){}
+
+function simResultHtml(r){
+  const parts = r.parts.map(p=>`<div class="td-row ${p.taxable?"":"free"}">
+    <div class="td-t">${nfTrim(p.qty)} ${esc(r.asset)} <span class="tag" data-b="${p.taxable?"par23":"neutral"}">${
+      p.taxable?"steuerpflichtig":"steuerfrei"}</span></div>${tdVal(p.gain)}
+    <div class="td-s">Kauf ${day(p.acquired)}${p.taxable?` · steuerfrei ab ${day(p.freeOn)}`:""} ·
+      Erlös ${eur(p.proceeds)} − Kosten ${eur(p.cost)}</div></div>`).join("");
+  const dl = (l,v,c)=>`<div class="tbd-row ${c||""}"><span>${l}</span><span>${v}</span></div>`;
+  const waits = (r.waits||[]).filter(w=>N(w.freedGain)!==0).map(w=>
+    `<li>ab ${day(w.date)}: ${eur(w.freedGain)} Gewinn mehr steuerfrei${
+      N(w.remainingTaxableGain)>0?` (dann noch ${eur(w.remainingTaxableGain)} steuerpflichtig)`:" – dann alles steuerfrei"}</li>`).join("");
+  return `<div class="td-sum">
+    ${dl(`Verkauf ${nfTrim(r.qty)} ${esc(r.asset)} zu ${eur(r.price)}`, eur(r.proceeds))}
+    ${dl("Gewinn steuerpflichtiger Teil", eur(r.taxableGain))}
+    ${dl("Gewinn steuerfreier Teil (Haltefrist)", eur(r.taxFreeGain))}
+    ${dl(`§ 23-Gewinn ${r.year} bisher`, eur(r.gainSoFar))}
+    ${dl(`Freigrenze ${eur(r.freigrenze)}`, r.exceededAfter
+        ? (r.exceededBefore ? "schon überschritten" : "<b>würde überschritten</b>") : "bleibt eingehalten")}
+    ${dl("Zusätzlich steuerpflichtig", eur(r.extraTaxable), "total")}
+    ${r.taxEstimate!=null ? dl("Steuer grob (ohne Soli/KiSt)", eur(r.taxEstimate)) : ""}
+  </div>
+  ${N(r.short)>0?`<div class="warn">Nur ${nfTrim(r.held)} ${esc(r.asset)} im Bestand – ${nfTrim(r.short)} fehlen.</div>`:""}
+  ${waits?`<div class="note" style="padding:0 20px 8px"><b>Warten lohnt sich?</b><ul style="margin:6px 0 0;padding-left:18px">${waits}</ul></div>`:""}
+  <div class="note" style="padding:0 20px 8px">FIFO: die ältesten Käufe werden zuerst verkauft. Es wird nichts gebucht.</div>
+  ${parts}`;
+}
+
+function wireSim(){
+  const go = $("#simGo"); if(!go) return;
+  go.onclick = async ()=>{
+    SIM.asset = $("#simAsset").value; SIM.qty = $("#simQty").value.trim();
+    SIM.price = $("#simPrice").value.trim(); SIM.date = $("#simDate").value;
+    SIM.rate = $("#simRate").value.trim();
+    try{ localStorage.setItem("kt-sim-rate", SIM.rate); }catch(e){}
+    go.disabled = true; go.textContent = "Rechne…";
+    try{
+      const r = await api("/api/simulate", {asset: SIM.asset,
+        qty: SIM.qty ? numIn(SIM.qty) : null, price: SIM.price ? numIn(SIM.price) : null,
+        date: SIM.date || null, taxRate: SIM.rate ? numIn(SIM.rate) : null});
+      SIM.html = simResultHtml(r);
+    }catch(e){ SIM.html = `<div class="warn">${esc(String(e.message||e))}</div>`; }
+    $("#simOut").innerHTML = SIM.html;
+    go.disabled = false; go.textContent = "Berechnen";
+  };
 }
 
 /* ===== Detailansicht je Steuertopf: welche Buchungen ergeben die Summe ===== */
@@ -2250,7 +2504,7 @@ window.pyReady = (async () => {
       pyodide.FS.syncfs(true, err => err ? rej(err) : res()));
 
     const files = ["ledger.py", "tax.py", "okx_import.py", "market.py",
-                    "webapi.py", "pdf_report.py", "schema.sql"];
+                    "webapi.py", "pdf_report.py", "checks.py", "schema.sql"];
     // Sichtbarer Fingerabdruck der geladenen Dateien (Groesse + einfache
     // Pruefsumme je Datei) - GitHub Pages liegt hinter einem CDN (Fastly),
     // das Antworten auch dann noch aus dem Edge-Cache liefern kann, wenn der
@@ -2295,7 +2549,7 @@ window.pyReady = (async () => {
       let vh = 0;
       const joined = fileVersions.join("|");
       for (let i = 0; i < joined.length; i++) { vh = (vh * 31 + joined.charCodeAt(i)) >>> 0; }
-      verEl.textContent = `Code-Stand ${vh.toString(16)} · geladen ${new Date().toLocaleTimeString("de-DE")}`;
+      verEl.textContent = `Version ${APP_BUILD} · Code-Stand ${vh.toString(16)} · geladen ${new Date().toLocaleTimeString("de-DE")}`;
       verEl.title = fileVersions.join("\n");
       verEl.onclick = () => alert(fileVersions.join("\n"));
     }

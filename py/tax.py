@@ -326,7 +326,9 @@ def build_lots(conn, table):
         # behandelt (Regelfall: OKX -> Trezor), also keine Veraeusserung.
         # Die Lots verlassen die OKX-Rechnung; auf der Wallet stehen sie
         # ueber die Bestands-CSV mit ihren urspruenglichen Kaufdaten.
-        is_withdrawal = t["tx_type"] == "withdrawal"
+        # Im Pruefen-Tab als "Zahlung an Dritte" markiert (Topf par23): dann
+        # ist die Auszahlung eine Veraeusserung zum Tageskurs.
+        is_withdrawal = t["tx_type"] == "withdrawal" and t["tax_bucket"] != "par23"
 
         for e in entries:
             asset, amt = e["asset"], L.D(e["amount"])
@@ -400,10 +402,10 @@ def build_lots(conn, table):
     if transferred_out:
         n = len({(x["asset"], x["date"]) for x in transferred_out})
         notes.append(
-            f"{n} Auszahlung(en) von OKX wurden als Übertrag auf eine eigene Wallet "
-            "behandelt (keine Veräußerung). Diese Coins müssen mit ihrem "
-            "ursprünglichen Kaufdatum in der Bestands-CSV der Wallet stehen. "
-            "War es eine Zahlung an Dritte, bitte als Veräußerung nachbuchen.")
+            f"{n} Auszahlung(en) von OKX gelten als Übertrag auf deine Trezor, deren "
+            "Coins mit Kaufdatum in der Bestands-CSV stehen (keine Veräußerung). "
+            "Im Tab „Prüfen“ unter „Ein- und Auszahlungen“ lässt sich das je Vorgang "
+            "ändern: Umbuchung mit Kaufdaten oder Zahlung an Dritte.")
 
     open_lots = []
     today = datetime.now(timezone.utc).date()
@@ -609,8 +611,13 @@ async def build_report(conn, fetcher=None):
         r20_taxable = (max(r20_after - SPARERPAUSCHBETRAG, Decimal(0))
                       if r20 >= 0 else r20_after)
 
+        decl = declaration_values(d_y, rows20, rows22, {
+            "par23": (gain, fg23), "par22": (sum22, fg22),
+            "par20": (r20, used20, r20_taxable)})
+
         out_years.append({
             "year": y,
+            "declaration": decl,
             "par23": {
                 "gain": gain,
                 "lossCarryIn": c23,
@@ -668,12 +675,168 @@ async def build_report(conn, fetcher=None):
         "openLots": open_lots,
         "warnings": warn,
         "notes": notes,
+        "methodology": methodology(),
         "missingRates": missing_rates[:20],
         "missingRatesCount": len(missing_rates),
         "rateSources": {**sources, **now_sources},
         "unknownCount": unknown,
         "blocked": unknown > 0 or bool(missing_rates),
         "generatedAt": L.now_utc(),
+    })
+
+
+# --- Werte fuer die Steuererklaerung ----------------------------------------
+
+def declaration_values(d_taxable, rows20, rows22, ctx):
+    """Bereitet die Jahreswerte so auf, wie sie in die Anlagen gehoeren.
+    Bewusst ohne Zeilennummern - die aendern sich je Formularjahr."""
+    D0 = Decimal(0)
+    priced = [d for d in d_taxable if d["gain_eur"] is not None]
+    proceeds = sum((d["proceeds_eur"] for d in priced), D0)
+    cost = sum((d["cost_eur"] for d in priced), D0)
+    gain23, fg23 = ctx["par23"]
+
+    def split(rows):
+        pos = sum((r["eur"] for r in rows if r["eur"] is not None and r["eur"] > 0), D0)
+        neg = sum((-r["eur"] for r in rows if r["eur"] is not None and r["eur"] < 0), D0)
+        return pos, neg
+
+    g20, l20 = split(rows20)
+    r20, used20, tax20 = ctx["par20"]
+    inc22, wk22 = split(rows22)
+    sum22, fg22 = ctx["par22"]
+    return {
+        "so23": {
+            "label": "Anlage SO – Private Veräußerungsgeschäfte, andere Wirtschaftsgüter (Kryptowerte)",
+            "count": len(d_taxable), "unpriced": len(d_taxable) - len(priced),
+            "proceeds": proceeds, "cost": cost, "werbungskosten": D0,
+            "gain": gain23, "freigrenzeExceeded": fg23["exceeded"],
+            "carryUsed": fg23["carryUsed"], "taxable": fg23["taxable"],
+            "hint": "Gebühren sind in Veräußerungspreis bzw. Anschaffungskosten "
+                    "eingerechnet, deshalb Werbungskosten 0. Einzelaufstellung: "
+                    "CSV- oder PDF-Export.",
+        },
+        "so22": {
+            "label": "Anlage SO – Leistungen (§ 22 Nr. 3 EStG)",
+            "income": inc22, "werbungskosten": wk22, "result": sum22,
+            "freigrenzeExceeded": fg22["exceeded"], "taxable": fg22["taxable"],
+        },
+        "kap20": {
+            "label": "Anlage KAP – Kapitalerträge ohne inländischen Steuerabzug (ausländischer Anbieter OKX)",
+            "result": r20, "gains": g20, "losses": l20,
+            "carryUsed": used20, "taxableAfterPauschbetrag": tax20,
+            "hint": "Ergebnis der Termingeschäfte; Gewinne und Verluste je Buchung "
+                    "(Futures-Ergebnis, Gebühr, Funding). Sparerpauschbetrag wird im "
+                    "Bescheid über alle Kapitalerträge berücksichtigt.",
+        },
+    }
+
+
+def methodology():
+    """Rechenweg in Worten - fuer Report, PDF und eine eventuelle
+    Rueckfrage des Finanzamts (BMF 6.3.2025: Verwendungsreihenfolge,
+    Kurse und Zeitpunkte muessen nachvollziehbar sein)."""
+    return [
+        "Verwendungsreihenfolge: FIFO je Kryptowert über alle Konten gemeinsam "
+        "(OKX Funding/Trading/Earn und Trezor).",
+        "Haltefrist: Die Jahresfrist beginnt am Tag nach der Anschaffung und endet mit "
+        "Ablauf des gleichnamigen Kalendertags im Folgejahr (§ 108 AO, §§ 187, 188 BGB); "
+        "ein Verkauf an diesem Tag ist noch steuerpflichtig.",
+        "Zeitpunkte: Zeitstempel der Börse, umgerechnet nach UTC; Datum nach UTC.",
+        "Kurse: EUR-Tageskurs der OKX-Public-API; wo am selben Tag ein eigener "
+        "Umtausch gegen EUR stattfand, dessen tatsächlicher Kurs. Wallet-Bestände mit "
+        "dem tatsächlich gezahlten Einstandswert.",
+        "Tausch Krypto gegen Krypto ist eine Veräußerung; in Krypto gezahlte Gebühren "
+        "und Funding sind Veräußerungen der hingegebenen Kryptowerte (§ 23 EStG).",
+        "Gebühren bei Tauschgeschäften: beim Kauf Anschaffungsnebenkosten, beim Verkauf "
+        "Veräußerungskosten.",
+        "Futures (Perpetuals): Termingeschäfte nach § 20 Abs. 2 S. 1 Nr. 3 EStG; "
+        "realisierter Gewinn/Verlust, Gebühren und Funding fließen in das Ergebnis. "
+        "Margin-Bewegungen sind keine Abgänge.",
+        "Umbuchungen zwischen eigenen Konten und mit der eigenen Trezor sind keine "
+        "Veräußerung; das ursprüngliche Anschaffungsdatum bleibt erhalten.",
+        "Freigrenze (§ 23: 1.000 € ab 2024, davor 600 €; § 22 Nr. 3: 256 €) wird vor "
+        "einem Verlustvortrag geprüft (BFH IX R 27/04).",
+        "Erhaltene Prämien/Airdrops („Received“) sind vorläufig § 22 Nr. 3 zugeordnet; "
+        "Zuordnung je Buchung änderbar.",
+    ]
+
+
+# --- Verkaufs-Simulator ------------------------------------------------------
+
+async def simulate_sale(conn, asset, qty=None, price_eur=None, sale_date=None,
+                        fetcher=None, tax_rate=None):
+    """Was passiert steuerlich, wenn ich jetzt (oder an einem Datum) verkaufe?
+    Rechnet auf den offenen FIFO-Lots, ohne etwas zu buchen."""
+    from datetime import date as _date
+    asset = (asset or "").upper().strip()
+    sale_date = _date.fromisoformat(sale_date) if sale_date else \
+        datetime.now(timezone.utc).date()
+    rep = await build_report(conn, fetcher=fetcher)
+    lots = [l for l in rep["openLots"] if l["asset"] == asset]
+    if not lots:
+        return {"__error__": f"Kein offener Bestand in {asset}."}
+    held = sum((L.D(l["qty"]) for l in lots), Decimal(0))
+    qty = held if qty in (None, "") else L.D(qty)
+    if qty <= 0:
+        return {"__error__": "Menge muss größer als 0 sein."}
+    if price_eur in (None, ""):
+        rate = next((l.get("rate_now") for l in lots if l.get("rate_now")), None)
+        if rate is None:
+            return {"__error__": "Kein aktueller Kurs verfügbar – bitte Preis eingeben."}
+        price = L.D(rate)
+    else:
+        price = L.D(price_eur)
+
+    need, parts = qty, []
+    for l in lots:                       # schon nach Kaufdatum sortiert (FIFO)
+        if need <= 0:
+            break
+        lq = L.D(l["qty"])
+        take = min(need, lq)
+        cost = (L.D(l["cost_eur"]) * take / lq) if l["cost_eur"] not in (None, "") else None
+        proceeds = price * take
+        taxable = innerhalb_haltefrist(l["acquired"], sale_date)
+        parts.append({
+            "acquired": l["acquired"], "qty": take, "cost": cost, "proceeds": proceeds,
+            "gain": (proceeds - cost) if cost is not None else None,
+            "taxable": taxable,
+            "freeOn": (haltefrist_ende(l["acquired"]) + timedelta(days=1)).isoformat(),
+            "account": l.get("account"),
+        })
+        need -= take
+
+    D0 = Decimal(0)
+    tax_gain = sum((p["gain"] for p in parts if p["taxable"] and p["gain"] is not None), D0)
+    free_gain = sum((p["gain"] for p in parts if not p["taxable"] and p["gain"] is not None), D0)
+    year = sale_date.year
+    ycur = next((y for y in rep["years"] if y["year"] == year), None)
+    gain_so_far = L.D(ycur["par23"]["gain"]) if ycur else D0
+    carry = L.D(ycur["par23"]["lossCarryIn"]) if ycur else D0
+    fg = freigrenze_23(year)
+    before = apply_freigrenze(gain_so_far, carry, fg)
+    after = apply_freigrenze(gain_so_far + tax_gain, carry, fg)
+    extra_taxable = after["taxable"] - before["taxable"]
+
+    # Wartevorteil: wann wird welcher steuerpflichtige Teil frei?
+    waits, remaining = [], tax_gain
+    for d in sorted({p["freeOn"] for p in parts if p["taxable"]}):
+        freed = sum((p["gain"] for p in parts
+                     if p["taxable"] and p["freeOn"] == d and p["gain"] is not None), D0)
+        remaining -= freed
+        waits.append({"date": d, "freedGain": freed, "remainingTaxableGain": remaining})
+
+    rate = L.D(tax_rate) / 100 if tax_rate not in (None, "") else None
+    return dec2str({
+        "asset": asset, "qty": qty, "held": held, "price": price,
+        "date": sale_date.isoformat(), "short": max(qty - held, D0),
+        "parts": parts, "proceeds": sum((p["proceeds"] for p in parts), D0),
+        "taxableGain": tax_gain, "taxFreeGain": free_gain,
+        "year": year, "gainSoFar": gain_so_far, "freigrenze": fg,
+        "exceededBefore": before["exceeded"], "exceededAfter": after["exceeded"],
+        "extraTaxable": extra_taxable,
+        "taxEstimate": (extra_taxable * rate) if rate is not None else None,
+        "waits": waits[:6],
     })
 
 
