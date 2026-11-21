@@ -63,6 +63,26 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .overlay{position:fixed;inset:0;z-index:500;background:var(--bg);overflow-y:auto;
   padding:max(18px,env(safe-area-inset-top)) 20px 32px}
 .ovinner{max-width:720px;margin:0 auto}
+/* Detailansicht eines Steuertopfs */
+.taxcard[data-b]{cursor:pointer}
+.taxcard[data-b]:focus-visible{outline:2px solid var(--a20);outline-offset:2px}
+.tx-more{margin-top:12px;font-size:12.5px;color:var(--dim);font-weight:500}
+.td-sum{padding:4px 20px 12px}
+.td-sum .tbd-row{display:flex;justify-content:space-between;gap:12px;font-family:var(--mono);
+  font-size:12.5px;padding:3px 0}
+.td-sum .tbd-row span:last-child{white-space:nowrap;text-align:right}
+.td-sum .tbd-row span:first-child{min-width:0}
+.td-sum .tbd-row.total{border-top:1px solid var(--line);margin-top:4px;padding-top:7px;
+  font-weight:600;font-size:13.5px}
+.td-chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 20px 12px}
+.td-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 12px;
+  padding:10px 20px;border-top:1px solid var(--line)}
+.td-row .td-t{font-size:13.5px;font-weight:500;display:flex;gap:7px;align-items:center;flex-wrap:wrap}
+.td-row .td-s{grid-column:1/-1;font-family:var(--mono);font-size:11px;line-height:1.55;color:var(--faint)}
+.td-row .td-v{font-family:var(--mono);font-size:13.5px;font-weight:600;text-align:right;white-space:nowrap}
+.td-row .td-v.pos{color:var(--up)} .td-row .td-v.neg{color:var(--down)}
+.td-row.free{opacity:.6}
+.td-more{display:block;margin:12px auto 0}
 .ovhead{display:flex;align-items:center;justify-content:space-between;margin:6px 0 22px}
 .ovhead h2{font-size:22px;font-weight:600;letter-spacing:-.02em;margin:0}
 .ovclose{width:40px;height:40px;border-radius:50%;border:none;background:none;
@@ -410,6 +430,13 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
     border-top-color:var(--a20);animation:pyspin .8s linear infinite"></div>
   <div style="font-size:13px;color:var(--dim)">Python-Laufzeit lädt (einmalig, danach schnell)…</div>
   <style>@keyframes pyspin{to{transform:rotate(360deg)}}</style>
+</div>
+<div class="overlay hidden noprint" id="taxDetail" role="dialog" aria-modal="true" aria-labelledby="taxDetailTitle">
+  <div class="ovinner">
+    <div class="ovhead"><h2 id="taxDetailTitle">Buchungen</h2>
+      <button class="ovclose" id="taxDetailClose" aria-label="Detailansicht schließen"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M5 5l14 14M19 5L5 19"/></svg></button></div>
+    <div id="taxDetailBody"></div>
+  </div>
 </div>
 <div class="overlay hidden noprint" id="menuOverlay" role="dialog" aria-modal="true" aria-label="Menü">
   <div class="ovinner">
@@ -1682,6 +1709,14 @@ function managePosAutoRefresh(){
 
 function wireTax(){
   document.querySelectorAll(".ychip").forEach(c=>c.onclick=()=>{YEAR=+c.dataset.y;render();});
+  document.querySelectorAll(".taxcard[data-b]").forEach(card=>{
+    if(!card.querySelector(".tx-more"))
+      card.insertAdjacentHTML("beforeend", `<div class="tx-more">Buchungen anzeigen ›</div>`);
+    card.setAttribute("role","button"); card.tabIndex = 0;
+    const open = ()=>openTaxDetail(card.dataset.b);
+    card.onclick = open;
+    card.onkeydown = e=>{ if(e.key==="Enter"||e.key===" "){ e.preventDefault(); open(); } };
+  });
   if($("#btnPdf")) $("#btnPdf").onclick=async()=>{
     const btn = $("#btnPdf"); const old = btn.textContent;
     btn.disabled = true; btn.textContent = "Erzeuge PDF…";
@@ -1896,6 +1931,174 @@ async function handleLotsFile(f){
       <div class="warn"><b>Das hat nicht geklappt</b>${esc(e.message||e)}</div></div>`;
   }
 }
+
+/* ===== Detailansicht je Steuertopf: welche Buchungen ergeben die Summe ===== */
+let TD = {bucket:null, filter:"taxable", group:null, limit:200, asset:""};
+const TD_TITLE = {par23:"§ 23 · Veräußerungen", par20:"§ 20 · Termingeschäfte",
+                  par22:"§ 22 · Sonstige Einkünfte"};
+
+function openTaxDetail(bucket){
+  TD = {bucket, filter:"taxable", group:null, limit:200, asset:""};
+  $("#taxDetailTitle").textContent = `${TD_TITLE[bucket]||bucket} ${YEAR}`;
+  renderTaxDetail();
+  $("#taxDetail").classList.remove("hidden");
+  $("#taxDetail").scrollTop = 0;
+  document.body.classList.add("menu-open");
+  $("#taxDetailClose").focus({preventScroll:true});
+}
+function closeTaxDetail(){
+  $("#taxDetail").classList.add("hidden");
+  document.body.classList.remove("menu-open");
+  const c = document.querySelector(`.taxcard[data-b="${TD.bucket}"]`);
+  if(c) c.focus({preventScroll:true});
+}
+
+function tdSumRows(lines){
+  return `<div class="td-sum">${lines.map(([l,v,cls])=>
+    `<div class="tbd-row ${cls||""}"><span>${l}</span><span>${v}</span></div>`).join("")}</div>`;
+}
+function tdChips(opts, key){
+  return opts.map(([v,l])=>`<button class="chip td-chip" data-k="${key}" data-v="${v}"
+    aria-pressed="${String(TD[key])===String(v)}">${l}</button>`).join("");
+}
+const tdVal = v => v==null ? `<span class="td-v">ohne Kurs</span>`
+  : `<span class="td-v ${N(v)>=0?"pos":"neg"}">${sgn(v)} €</span>`;
+
+function renderTaxDetail(){
+  const y = TAXR && TAXR.years.find(v=>v.year===YEAR);
+  const body = $("#taxDetailBody");
+  if(!y){ body.innerHTML = `<div class="card"><div class="empty"><p>Keine Daten.</p></div></div>`; return; }
+  body.innerHTML = TD.bucket==="par23" ? tdPar23(y) : tdFlat(y, TD.bucket);
+  body.querySelectorAll(".td-chip").forEach(c=>c.onclick=()=>{
+    const k=c.dataset.k; let v=c.dataset.v;
+    if(k==="group") v = v==="true";
+    TD[k]=v; TD.limit=200; renderTaxDetail();
+  });
+  const sel = body.querySelector("#tdAsset");
+  if(sel) sel.onchange = ()=>{ TD.asset = sel.value; TD.limit=200; renderTaxDetail(); };
+  const more = body.querySelector(".td-more");
+  if(more) more.onclick = ()=>{ TD.limit += 500; renderTaxDetail(); };
+}
+
+function tdList(rows, rowFn){
+  const shown = rows.slice(0, TD.limit);
+  return `<div class="card" style="padding-bottom:${rows.length>TD.limit?"14px":"0"}">
+    ${shown.length ? shown.map(rowFn).join("")
+      : `<div class="empty"><p>Keine Buchungen für diese Auswahl.</p></div>`}
+    ${rows.length>TD.limit ? `<button class="chip td-more">Weitere ${
+      Math.min(500, rows.length-TD.limit)} von ${rows.length-TD.limit} anzeigen</button>` : ""}
+  </div>`;
+}
+
+function tdPar23(y){
+  const p = y.par23;
+  const all = (p.disposals||[]);
+  const assets = [...new Set(all.map(d=>d.asset))].sort();
+  let rows = all.filter(d => TD.filter==="all" || (TD.filter==="taxable") === !!d.taxable)
+                .filter(d => !TD.asset || d.asset===TD.asset);
+  if(TD.group==null) TD.group = rows.length > 150;
+  if(TD.group){
+    const g = {};
+    rows.forEach(d=>{
+      const k = [d.sold, d.asset, d.taxable].join("|");
+      const o = g[k] || (g[k] = {sold:d.sold, asset:d.asset, taxable:d.taxable, qty:0,
+        proceeds:0, cost:0, gain:0, missing:false, n:0, acqMin:d.acquired, acqMax:d.acquired});
+      o.qty += N(d.qty); o.n++;
+      if(d.gain_eur==null) o.missing = true;
+      else { o.gain += N(d.gain_eur); o.proceeds += N(d.proceeds_eur); o.cost += N(d.cost_eur); }
+      if(d.acquired < o.acqMin) o.acqMin = d.acquired;
+      if(d.acquired > o.acqMax) o.acqMax = d.acquired;
+    });
+    rows = Object.values(g).map(o=>({asset:o.asset, qty:o.qty, sold:o.sold, taxable:o.taxable,
+      acquired: o.acqMin===o.acqMax ? day(o.acqMin) : `${day(o.acqMin)}–${day(o.acqMax)}`,
+      proceeds_eur:o.missing?null:o.proceeds, cost_eur:o.missing?null:o.cost,
+      gain_eur:o.missing?null:o.gain, n:o.n, grouped:true}));
+  }
+  rows.sort((a,b)=> a.sold<b.sold?-1:a.sold>b.sold?1:0);
+
+  const sumTax = all.filter(d=>d.taxable && d.gain_eur!=null).reduce((s,d)=>s+N(d.gain_eur),0);
+  const sumFree = all.filter(d=>!d.taxable && d.gain_eur!=null).reduce((s,d)=>s+N(d.gain_eur),0);
+  const nTax = all.filter(d=>d.taxable).length, nFree = all.length - nTax;
+  const lines = [
+    [`Steuerpflichtige Veräußerungen (${nTax})`, eur(p.gain)],
+    ...(N(p.carryUsed)>0 ? [["− Verlustvortrag genutzt", "−"+eur(p.carryUsed)]] : []),
+    [`Freigrenze ${eur(p.freigrenze)}`, p.exceeded ? "überschritten" : "nicht überschritten"],
+    ["Steuerpflichtig", eur(p.taxable), "total"],
+    [`Steuerfrei nach Haltefrist (${nFree}, nicht enthalten)`, eur(sumFree)],
+  ];
+  const hint = Math.abs(sumTax - N(p.gain)) > 0.005
+    ? `<div class="note" style="padding:0 20px 10px;color:var(--a22)">Zeilensumme ${eur(sumTax)} weicht von der Summe ab – einzelne Zeilen ohne Kurs?</div>` : "";
+
+  const rowFn = d => `<div class="td-row ${d.taxable?"":"free"}">
+    <div class="td-t">${nfTrim(d.qty)} ${esc(d.asset)}
+      <span class="tag" data-b="${d.taxable?"par23":"neutral"}">${d.taxable?"steuerpflichtig":"steuerfrei"}</span></div>
+    ${tdVal(d.gain_eur)}
+    <div class="td-s">Verkauf ${day(d.sold)} · Erwerb ${d.grouped?d.acquired:day(d.acquired)}${
+      d.grouped?"":` · ${d.held_days} Tage`}${d.grouped&&d.n>1?` · ${d.n} Teilabgänge`:""}<br>
+      Erlös ${eur(d.proceeds_eur)} − Kosten ${eur(d.cost_eur)}${d.note&&!d.grouped?` · ${esc(d.note)}`:""}</div>
+  </div>`;
+
+  return `<div class="card" style="margin-bottom:12px">${tdSumRows(lines)}</div>${hint}
+    <div class="td-chips">
+      ${tdChips([["taxable","Steuerpflichtig"],["free","Steuerfrei"],["all","Alle"]],"filter")}
+      ${tdChips([[false,"Einzeln"],[true,"Je Tag zusammen"]],"group")}
+      ${assets.length>1?`<select id="tdAsset" class="search" style="min-width:0;margin-left:0">
+        <option value="">Alle Assets</option>${assets.map(a=>
+        `<option value="${esc(a)}" ${a===TD.asset?"selected":""}>${esc(a)}</option>`).join("")}</select>`:""}
+    </div>
+    <div class="note" style="padding:0 20px 10px">${rows.length} Zeile(n) · FIFO, je Kauf ein Teilabgang.
+      Gewinn = Erlös − Anschaffungskosten (Gebühren eingerechnet).</div>
+    ${tdList(rows, rowFn)}`;
+}
+
+function tdFlat(y, bucket){
+  const p = y[bucket];
+  let rows = (p.rows||[]).slice();
+  if(TD.group==null) TD.group = rows.length > 150;
+  if(TD.group){
+    const g = {};
+    rows.forEach(r=>{
+      const k = r.date + "|" + r.txType;
+      const o = g[k] || (g[k] = {date:r.date, txType:r.txType, eur:0, missing:false, n:0, native:{}});
+      o.n++;
+      if(r.eur==null) o.missing = true; else o.eur += N(r.eur);
+      (r.native||[]).forEach(x=>{ o.native[x.asset] = (o.native[x.asset]||0) + N(x.amount); });
+    });
+    rows = Object.values(g).map(o=>({date:o.date, txType:o.txType, eur:o.missing?null:o.eur,
+      n:o.n, grouped:true, note:null,
+      native:Object.entries(o.native).map(([asset,amount])=>({asset,amount,kind:"principal"}))}));
+  }
+  rows.sort((a,b)=> a.date<b.date?-1:a.date>b.date?1:0);
+
+  const lines = bucket==="par20" ? [
+    [`Ergebnis aus ${p.count} Buchungen`, eur(p.result)],
+    ...(N(p.carryUsed)>0 ? [["− Verlustvortrag genutzt", "−"+eur(p.carryUsed)]] : []),
+    ...(N(p.result)>0 ? [[`− Sparerpauschbetrag (max. ${eur(p.sparerpauschbetrag)})`,
+      "−"+eur(Math.min(N(p.sparerpauschbetrag), Math.max(0, N(p.resultAfterCarry))))]] : []),
+    ["Steuerpflichtig", eur(p.taxable), "total"],
+  ] : [
+    [`Einkünfte aus ${p.count} Buchungen`, eur(p.result)],
+    [`Freigrenze ${eur(p.freigrenze)}`, p.exceeded ? "überschritten" : "nicht überschritten"],
+    ...(N(p.carryUsed)>0 ? [["− Verlustvortrag genutzt", "−"+eur(p.carryUsed)]] : []),
+    ["Steuerpflichtig", eur(p.taxable), "total"],
+  ];
+  const rowFn = r => `<div class="td-row">
+    <div class="td-t">${esc(TXL[r.txType]||r.txType)}${r.grouped&&r.n>1?` <span class="tag" data-b="${bucket}">${r.n}×</span>`:""}</div>
+    ${tdVal(r.eur)}
+    <div class="td-s">${day(r.date)} · ${(r.native||[]).map(n=>
+      `${nfx(n.amount)} ${esc(n.asset)}${n.kind==="fee"?" (Gebühr)":n.kind==="funding"?" (Funding)":""}`).join(" · ")}${
+      r.note?`<br>${esc(r.note)}`:""}</div>
+  </div>`;
+  return `<div class="card" style="margin-bottom:12px">${tdSumRows(lines)}</div>
+    <div class="td-chips">${tdChips([[false,"Einzeln"],[true,"Je Tag zusammen"]],"group")}</div>
+    <div class="note" style="padding:0 20px 10px">${rows.length} Zeile(n) · EUR zum Tageskurs.</div>
+    ${tdList(rows, rowFn)}`;
+}
+
+$("#taxDetailClose").onclick = closeTaxDetail;
+document.addEventListener("keydown",e=>{
+  if(e.key==="Escape" && !$("#taxDetail").classList.contains("hidden")) closeTaxDetail();
+});
 
 function go(tab){TAB=tab;render();}
 window.go=go;
