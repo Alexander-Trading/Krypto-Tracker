@@ -17,7 +17,7 @@ falsch. Dieses Modul sucht deshalb aktiv nach Luecken:
 """
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 import ledger as L
@@ -336,15 +336,40 @@ def data_checks(conn):
         else:
             used.update({i, match})
     if open_:
+        # Zu jeder offenen Umbuchung die Kandidaten aus der Umgebung zeigen:
+        # gleicher Coin, anderes OKX-Konto, +-24 h, beliebige Art. So sieht
+        # man, ob die Gegenseite z. B. unter einer unbekannten OKX-Bezeichnung
+        # als "adjustment" gelandet ist oder einen anderen Betrag hat.
+        items = []
+        for o in open_[:20]:
+            d = _tx_detail(conn, o["id"], role="ohne Gegenstück")
+            if d:
+                items.append(d)
+            t0 = datetime.fromisoformat(o["ts_utc"].replace("Z", "+00:00"))
+            for c in conn.execute(
+                    """SELECT DISTINCT t.id, t.ts_utc FROM transactions t
+                       JOIN entries e ON e.transaction_id = t.id
+                       WHERE e.asset = ? AND t.id != ? AND t.account != ?
+                         AND t.account IN ('funding','trading','earn')
+                         AND t.ts_utc BETWEEN ? AND ?
+                       ORDER BY t.ts_utc""",
+                    (o["asset"], o["id"], o["account"],
+                     (t0 - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S"),
+                     (t0 + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))):
+                cd = _tx_detail(conn, c["id"], role="in der Nähe (±24 h)")
+                if cd:
+                    items.append(cd)
         issues.append({
-            "items": [x for x in (_tx_detail(conn, o["id"]) for o in open_[:50]) if x],
+            "items": items,
             "level": "info", "kind": "transfer",
             "title": f"{len(open_)} Umbuchung(en) ohne Gegenstück",
             "detail": "Bei OKX erscheint eine Umbuchung zwischen Funding- und Trading-"
                       "Konto in beiden Exporten. Fehlt eine Seite, ist vermutlich eine "
                       "der beiden Dateien (Funding oder Trading History) für diesen "
                       "Zeitraum nicht importiert. Steuerlich unkritisch, aber die "
-                      "Kontostände je Konto stimmen dann nicht."
+                      "Kontostände je Konto stimmen dann nicht. Unter jeder Umbuchung "
+                      "stehen die Buchungen im selben Coin auf den anderen OKX-Konten "
+                      "(±24 h) – daran sieht man, ob die Gegenseite anders gebucht wurde."
                       + (f" Angezeigt: die ersten 50 von {len(open_)}." if len(open_) > 50 else "")})
 
     # 4) Krypto-Ein-/Auszahlungen, die noch auf Standard stehen.
