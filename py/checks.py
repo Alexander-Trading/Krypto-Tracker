@@ -214,11 +214,18 @@ def balance_check(conn):
 def _tx_detail(conn, tx_id, **extra):
     """Eine Buchung so aufbereitet, dass man sie im Pruefen-Tab wiedererkennt."""
     t = conn.execute(
-        "SELECT id, ts_utc, tx_type, account, tax_bucket, source, external_id, note "
+        "SELECT id, ts_utc, tx_type, account, tax_bucket, source, external_id, note, raw "
         "FROM transactions WHERE id = ?", (tx_id,)).fetchone()
     if not t:
         return None
     d = dict(t)
+    # Originalzeile aus der OKX-Datei (nur belegte Spalten), zum Nachvollziehen
+    try:
+        raw = json.loads(d.pop("raw") or "null") or {}
+    except (ValueError, TypeError):
+        raw = {}
+    d["raw"] = {str(k): str(v) for k, v in raw.items()
+                if k and v not in (None, "") and not isinstance(v, (list, dict))}
     d["entries"] = [{"asset": e["asset"], "amount": e["amount"], "kind": e["kind"]}
                     for e in _entries(conn, tx_id)]
     d.update(extra)

@@ -153,6 +153,11 @@ button{-webkit-tap-highlight-color:transparent}
 .chk-it-a .pos{color:var(--up)} .chk-it-a .neg{color:var(--down)} .chk-it-a i{color:var(--faint);font-style:normal}
 .chk-it-m{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:4px;line-height:1.5;word-break:break-word}
 .chk-del,.chk-ok,.chk-jump{margin-top:8px}
+.chk-raw{margin-top:6px}
+.chk-raw summary{cursor:pointer;font-size:11.5px;color:var(--dim)}
+.chk-raw div{display:flex;justify-content:space-between;gap:10px;font-family:var(--mono);
+  font-size:10.5px;padding:2px 0;border-bottom:1px solid var(--line);word-break:break-all}
+.chk-raw span{color:var(--faint);flex:0 0 auto} .chk-raw b{font-weight:500;text-align:right}
 .chk-d{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.5;margin-top:4px}
 #chkWrap .note-s{white-space:normal;overflow:visible}
 .bc-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:7px;font-size:12.5px}
@@ -567,7 +572,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-22.3";
+const APP_BUILD="2026-11-22.4";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
@@ -1103,6 +1108,8 @@ function chkItems(issue){
         esc(e.asset)}</b>${e.kind!=="principal"?` <i>(${e.kind==="fee"?"Gebühr":e.kind==="funding"?"Funding":esc(e.kind)})</i>`:""}`).join(" · ")}</div>
       <div class="chk-it-m">${esc(ACC_L[d.account]||d.account)} · ${esc((B[d.tax_bucket]||{}).s||d.tax_bucket)} · ${
         esc(srcLabel(d.source))} · Nr. ${d.id}${d.note?`<br>${esc(d.note)}`:""}</div>
+      ${d.raw && Object.keys(d.raw).length ? `<details class="chk-raw"><summary>Originalzeile aus der OKX-Datei</summary>${
+        Object.entries(d.raw).map(([k,v])=>`<div><span>${esc(k)}</span><b>${esc(v)}</b></div>`).join("")}</details>` : ""}
       ${canDel?`<button class="chip chk-del" data-id="${d.id}">Diese Buchung löschen</button>`:""}
     </div>`;
     const next = items[k+1];
