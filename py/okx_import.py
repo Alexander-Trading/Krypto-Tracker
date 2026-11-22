@@ -422,26 +422,11 @@ def import_file(conn, path, source=None):
     source = source or "okx_csv"
     file_sha256 = L.sha256_file(path)
 
+    # Byteidentische Datei schon einmal importiert? Frueher wurde dann gar
+    # nicht mehr gelesen - man konnte nicht sehen, ob die Datei ueberhaupt
+    # verstanden wurde. Jetzt wird trotzdem gelesen; doppelte Buchungen
+    # verhindert ohnehin der Schluessel (source, external_id).
     dupe = find_duplicate_run(conn, file_sha256)
-    if dupe:
-        conn.execute(
-            """INSERT INTO import_runs (started_at, source, filename, file_sha256,
-                                        rows_read, rows_imported, rows_skipped, note)
-               VALUES (?, ?, ?, ?, 0, 0, 0, ?)""",
-            (L.now_utc(), source, path.name, file_sha256,
-             json.dumps({"duplicateOf": dupe["id"]}, ensure_ascii=False)))
-        conn.commit()
-        return {
-            "kind": "duplicate", "duplicate": True,
-            "duplicateOfRun": dupe["id"],
-            "duplicateImportedAt": dupe["started_at"],
-            "timezone": None, "rowsRead": 0, "imported": 0, "skipped": 0,
-            "unknown": [], "positions": [],
-            "warnings": [
-                f"Diese Datei wurde bereits am {dupe['started_at'][:16].replace('T',' ')} "
-                f"importiert (als „{dupe['filename']}“, {dupe['rows_imported']} Buchungen). "
-                "Es wurde nichts erneut eingelesen."],
-        }
 
     meta, rows = read_okx_csv(path)
     kind = detect_kind(rows)
@@ -470,6 +455,11 @@ def import_file(conn, path, source=None):
             "die Zeitstempel verschoben.")
     if kind == "leer":
         warnings.append("Die Datei enthält keine Datenzeilen, nur Spaltennamen.")
+    if dupe:
+        warnings.append(
+            f"Diese Datei wurde bereits am {dupe['started_at'][:16].replace('T',' ')} "
+            f"importiert. Erneut gelesen: {len(rows)} Zeilen, davon {added} neu und "
+            f"{skipped} schon vorhanden.")
 
     conn.execute(
         """INSERT INTO import_runs (started_at, source, filename, file_sha256, rows_read,
@@ -497,6 +487,7 @@ def import_file(conn, path, source=None):
 
     return {
         **extra,
+        "duplicate": bool(dupe),
         "kind": kind,
         "timezone": meta["tz_label"],
         "rowsRead": len(rows),
