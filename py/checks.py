@@ -353,16 +353,22 @@ def data_checks(conn):
             if d:
                 items.append(d)
             t0 = datetime.fromisoformat(o["ts_utc"].replace("Z", "+00:00"))
-            for c in conn.execute(
-                    """SELECT DISTINCT t.id, t.ts_utc FROM transactions t
-                       JOIN entries e ON e.transaction_id = t.id
-                       WHERE e.asset = ? AND t.id != ? AND t.account != ?
+            # Alle Coins: bei "Umtauschen"/"Krypto kaufen" mit Euro zieht OKX im
+            # Funding-Konto EUR ab und schreibt im Trading-Konto den Coin als
+            # "Transfer" gut. Die 8 zeitlich naechsten Buchungen.
+            cands = conn.execute(
+                    """SELECT t.id, t.ts_utc FROM transactions t
+                       WHERE t.id != ? AND t.account != ?
                          AND t.account IN ('funding','trading','earn')
                          AND t.ts_utc BETWEEN ? AND ?
-                       ORDER BY t.ts_utc""",
-                    (o["asset"], o["id"], o["account"],
+                         AND t.tx_type NOT IN ('funding_fee')""",
+                    (o["id"], o["account"],
                      (t0 - timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%S"),
-                     (t0 + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))):
+                     (t0 + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ"))).fetchall()
+            def gap(r):
+                return abs((datetime.fromisoformat(r["ts_utc"].replace("Z", "+00:00")) - t0)
+                           .total_seconds())
+            for c in sorted(cands, key=gap)[:8]:
                 cd = _tx_detail(conn, c["id"], role="in der Nähe (±24 h)")
                 if cd:
                     items.append(cd)
@@ -391,8 +397,9 @@ def data_checks(conn):
                       "der beiden Dateien (Funding oder Trading History) für diesen "
                       "Zeitraum nicht importiert. Steuerlich unkritisch, aber die "
                       "Kontostände je Konto stimmen dann nicht. Unter jeder Umbuchung "
-                      "stehen die Buchungen im selben Coin auf den anderen OKX-Konten "
-                      "(±24 h) – daran sieht man, ob die Gegenseite anders gebucht wurde."
+                      "stehen die zeitlich nächsten Buchungen auf den anderen OKX-Konten "
+                      "(±24 h, alle Coins) – daran sieht man, ob die Gegenseite anders "
+                      "gebucht wurde, z. B. als Euro-Abgang bei einem Kauf über „Umtauschen“."
                       + cov_txt
                       + (f" Angezeigt: die ersten 50 von {len(open_)}." if len(open_) > 50 else "")})
 
