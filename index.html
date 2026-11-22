@@ -531,7 +531,15 @@ const nfx = v => N(v).toLocaleString("de-DE",
   {minimumFractionDigits:2, maximumFractionDigits: Math.abs(N(v)) < 1 ? 8 : 2});
 const sgn = v => (N(v) >= 0 ? "+" : "") + nf(v);
 const day = s => s ? s.slice(0,10).split("-").reverse().join(".") : "–";
-const dtm = s => s ? day(s) + " " + s.slice(11,16) : "–";
+// Zeitpunkte sind intern UTC; angezeigt wird deutsche Zeit (MEZ/MESZ).
+const dtm = s => {
+  if(!s) return "–";
+  const iso = /[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s.replace(" ","T") + "Z";
+  const d = new Date(iso);
+  if(isNaN(d)) return day(s) + " " + s.slice(11,16);
+  return d.toLocaleString("de-DE", {timeZone:"Europe/Berlin", day:"2-digit", month:"2-digit",
+    year:"numeric", hour:"2-digit", minute:"2-digit"}).replace(",", "");
+};
 const plural = (n,a,b) => `${n} ${n===1?a:b}`;
 
 const COL = {par23:"var(--a23)", par20:"var(--a20)", par22:"var(--a22)",
@@ -559,7 +567,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-22.1";
+const APP_BUILD="2026-11-22.2";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();

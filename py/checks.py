@@ -269,15 +269,27 @@ def data_checks(conn):
 
     # 2) Moegliche Doppelbuchungen: gleiche Sekunde, gleiche Buchungszeilen,
     #    aber unterschiedliche Vorgaenge.
-    sig = {}
+    #    Nicht gemeldet: Gruppen, die nur aus OKX-Importzeilen mit jeweils
+    #    eigener OKX-ID bestehen. Der Import uebernimmt jede OKX-Zeile genau
+    #    einmal (Schluessel = OKX-ID); zwei solche Zeilen sind echte, getrennte
+    #    Vorgaenge (typisch: Teilausfuehrungen einer Order mit gleicher Gebuehr).
+    sig, meta = {}, {}
     for t in conn.execute(
-            "SELECT id, ts_utc, tx_type, source FROM transactions WHERE source != ?",
-            (MIRROR_SOURCE,)):
+            "SELECT id, ts_utc, tx_type, source, external_id FROM transactions "
+            "WHERE source != ?", (MIRROR_SOURCE,)):
         ents = tuple(sorted((e["asset"], L.dstr(L.D(e["amount"])), e["kind"])
                             for e in _entries(conn, t["id"])))
         sig.setdefault((t["ts_utc"], t["tx_type"], ents), []).append(t["id"])
+        meta[t["id"]] = (t["source"], t["external_id"])
+
+    def okx_distinct(ids):
+        srcs = [meta[i][0] for i in ids]
+        exts = [meta[i][1] for i in ids]
+        return (all(s not in ("manual", "wallet_csv") for s in srcs)
+                and all(exts) and len(set(exts)) == len(exts))
+
     ignored = set(_state(conn, "ignored_duplicates", []))
-    dups = [ids for ids in sig.values() if len(ids) > 1
+    dups = [ids for ids in sig.values() if len(ids) > 1 and not okx_distinct(ids)
             and ",".join(str(i) for i in sorted(ids)) not in ignored]
     if dups:
         items = []
@@ -290,9 +302,9 @@ def data_checks(conn):
             "level": "warn", "kind": "duplicate",
             "title": f"{len(dups)} mögliche Doppelbuchung(en)",
             "detail": "Gleicher Zeitpunkt, gleiche Art, gleiche Beträge – aber getrennt "
-                      "gebucht. Typisch: dieselbe Buchung manuell und per Import erfasst. "
-                      "Kann aber auch korrekt sein, z. B. zwei Teilausführungen einer Order "
-                      "in derselben Sekunde. Dann „Ist korrekt“ tippen."
+                      "gebucht, mindestens eine davon manuell oder aus der Bestands-CSV. "
+                      "Typisch: dieselbe Buchung manuell und per Import erfasst – dann die "
+                      "manuelle löschen. Ist es doch korrekt, „Ist korrekt“ tippen."
                       + (f" Angezeigt: die ersten 25 von {len(dups)}." if len(dups) > 25 else ""),
             "items": items})
 

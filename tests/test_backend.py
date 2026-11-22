@@ -297,6 +297,12 @@ async def neue_funktionen():
         entries=[L.Entry("BTC", "-0.001", "fee")]))
     kinds = {i["kind"] for i in CHK.data_checks(c)}
     assert {"negative", "duplicate"} <= kinds, kinds
+    # zwei OKX-Importzeilen mit eigener ID (Teilausfuehrungen): keine Meldung
+    c = fresh()
+    for ext in ("trade-1", "trade-2"):
+        _tx(c, "2026-10-15T15:02:00Z", "trade_derivative", "trading", "par20",
+            [L.Entry("USDC", "-0.00408857", "fee")], ext)
+    assert "duplicate" not in {i["kind"] for i in CHK.data_checks(c)}
 
     # Erklaerungswerte und Rechenweg im Report
     c = fresh()
