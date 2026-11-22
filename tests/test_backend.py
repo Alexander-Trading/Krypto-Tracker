@@ -328,6 +328,19 @@ async def neue_funktionen():
                                   sale_date="2026-03-01", fetcher=None, tax_rate="42")
     assert D(sim["taxableGain"]) == D(1300) and sim["exceededAfter"]
     assert D(sim["taxEstimate"]) == D(1300) * D("0.42"), sim
+    # Transfer in einen separaten OKX-Topf (Saldo springt nicht mit): nicht buchen
+    rows = [
+        {"id": "1", "Time": "2026-11-16 16:00:03", "Trade Type": "Futures", "Action": "Funding fee expense",
+         "Symbol": "X", "PnL": "-1", "Fee": "0", "Fee Unit": "USDC", "Balance Change": "0",
+         "Balance": "0.4966", "Balance Unit": "USDC"},
+        {"id": "2", "Time": "2026-11-16 23:17:14", "Trade Type": "Transfer", "Action": "",
+         "Symbol": "", "PnL": "0", "Fee": "0", "Fee Unit": "USDC", "Balance Change": "18.7",
+         "Balance": "18.7", "Balance Unit": "USDC"},
+        {"id": "3", "Time": "2026-11-17 22:39:52", "Trade Type": "Transfer", "Action": "Transfer in",
+         "Symbol": "", "PnL": "0", "Fee": "0", "Fee Unit": "USDC", "Balance Change": "26.8886",
+         "Balance": "27.3852", "Balance Unit": "USDC"},
+    ]
+    assert IMP.foreign_pot_transfers(rows) == {"2"}
     print("Neue Funktionen OK")
 
 

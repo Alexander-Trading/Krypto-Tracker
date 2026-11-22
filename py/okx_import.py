@@ -178,9 +178,40 @@ def import_funding(conn, rows, meta, source):
 
 # --- Trading History -------------------------------------------------------
 
-def import_trading(conn, rows, meta, source):
+def foreign_pot_transfers(rows):
+    """Transfer-Zeilen, die NICHT ins Trading-Guthaben gehen.
+
+    Die Spalte "Balance" ist der Kontostand der Waehrung nach der Zeile. Bei
+    einer echten Umbuchung gilt: Stand davor + Betrag = Stand danach. OKX
+    schreibt aber auch Transfers in separate Toepfe (z. B. Bonus/Gutschein)
+    in die Trading History - dann beginnt "Balance" bei 0, und die naechste
+    Zeile zeigt wieder den alten Kontostand. Solche Zeilen werden nicht
+    gebucht, sonst waere der Bestand zu hoch. Erkannt am 16.11.2026:
+    "Transfer" ohne Action, +18,70 USDC, Balance 18,70 statt 19,1966."""
+    def key(r):
+        return (r.get("Time") or "", int(r["id"]) if str(r.get("id", "")).isdigit() else 0)
+    last, foreign = {}, set()
+    for r in sorted(rows, key=key):
+        unit = (r.get("Balance Unit") or "").strip()
+        try:
+            bal = L.D(r.get("Balance") or "0")
+            chg = L.D(r.get("Balance Change") or "0")
+        except Exception:
+            continue
+        if not unit:
+            continue
+        if (r.get("Trade Type") or "").strip() == "Transfer" and unit in last \
+                and abs(last[unit] + chg - bal) > Decimal("0.000001"):
+            foreign.add(r["id"])
+            continue          # Kontostand des Trading-Kontos nicht fortschreiben
+        last[unit] = bal
+    return foreign
+
+
+def import_trading(conn, rows, meta, source, notes=None):
     added, skipped, unknown = 0, 0, set()
     off = meta["tz_offset"]
+    foreign = foreign_pot_transfers(rows)
 
     # Convert-Buchungen kommen als zwei Zeilen mit derselben Order id und
     # gehoeren zu einer Transaktion zusammen.
@@ -221,6 +252,21 @@ def import_trading(conn, rows, meta, source):
         ts = to_utc(r["Time"], off)
         ext = f"trade-{r['id']}"
         entries = []
+
+        if r["id"] in foreign:
+            # Nicht buchen - und eine aus einem frueheren Import schon
+            # vorhandene Buchung wieder entfernen.
+            gone = conn.execute(
+                "DELETE FROM transactions WHERE source = ? AND external_id = ?",
+                (source, ext)).rowcount
+            if notes is not None:
+                notes.append(
+                    f"{dict(r).get('Time')} (Zeitzone der Datei): „Transfer“ "
+                    f"{r.get('Balance Change')} {r.get('Balance Unit')} nicht gebucht – "
+                    "der Kontostand des Trading-Kontos hat sich dadurch nicht verändert "
+                    "(separater OKX-Topf, z. B. Bonus/Gutschein)."
+                    + (" Die früher importierte Buchung wurde entfernt." if gone else ""))
+            continue
 
         if trade_type == "Transfer":
             tx_type, bucket = "transfer", "neutral"
@@ -434,7 +480,8 @@ def import_file(conn, path, source=None):
     if kind == "funding":
         added, skipped, unknown = import_funding(conn, rows, meta, source)
     elif kind == "trading":
-        added, skipped, unknown = import_trading(conn, rows, meta, source)
+        trade_notes = []
+        added, skipped, unknown = import_trading(conn, rows, meta, source, notes=trade_notes)
     elif kind == "positions":
         added, updated, skipped = import_position_history(conn, rows, meta)
         unknown = set()
@@ -448,6 +495,8 @@ def import_file(conn, path, source=None):
             "Position History).")
 
     warnings = []
+    if kind == "trading" and trade_notes:
+        warnings.extend(trade_notes)
     if rows and not meta["tz_found"]:
         warnings.append(
             "In der Kopfzeile steht keine Zeitzone. Es wurde UTC angenommen. "

@@ -249,7 +249,10 @@ def data_checks(conn):
     for r in conn.execute(
             """SELECT t.id, t.ts_utc, e.asset, e.amount FROM entries e
                JOIN transactions t ON t.id = e.transaction_id
-               ORDER BY t.ts_utc, t.id, e.id"""):
+               ORDER BY t.ts_utc, CASE WHEN CAST(e.amount AS REAL) < 0 THEN 1 ELSE 0 END,
+                        t.id, e.id"""):
+        # Bei gleichem Zeitstempel Zugaenge vor Abgaengen: OKX schreibt z. B.
+        # die Umbuchung ins Trading-Konto und den Kauf in dieselbe Sekunde.
         a = r["asset"]
         running[a] = running.get(a, Decimal(0)) + L.D(r["amount"])
         if running[a] < -TOL and a not in first_neg:
