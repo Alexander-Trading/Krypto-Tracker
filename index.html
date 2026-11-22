@@ -142,6 +142,17 @@ button{-webkit-tap-highlight-color:transparent}
   gap:10px 16px;align-items:center}
 .rvrow:first-child{border-top:none}
 .rvinfo{flex:1 1 220px;min-width:0}
+.chk-items{margin-top:10px}
+.chk-items summary{cursor:pointer;font-size:12.5px;color:var(--a20);font-weight:500;padding:4px 0}
+.chk-grp{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+  color:var(--faint);margin:12px 0 2px}
+.chk-it{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-top:8px;background:var(--panel-2)}
+.chk-it-h{display:flex;justify-content:space-between;gap:8px;align-items:center;flex-wrap:wrap;
+  font-size:13px;font-weight:500}
+.chk-it-a{font-family:var(--mono);font-size:12px;margin-top:5px;line-height:1.5}
+.chk-it-a .pos{color:var(--up)} .chk-it-a .neg{color:var(--down)} .chk-it-a i{color:var(--faint);font-style:normal}
+.chk-it-m{font-family:var(--mono);font-size:10.5px;color:var(--faint);margin-top:4px;line-height:1.5;word-break:break-word}
+.chk-del,.chk-ok,.chk-jump{margin-top:8px}
 .chk-d{white-space:normal!important;overflow:visible!important;text-overflow:clip!important;line-height:1.5;margin-top:4px}
 #chkWrap .note-s{white-space:normal;overflow:visible}
 .bc-line{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:7px;font-size:12.5px}
@@ -548,7 +559,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-21.4";
+const APP_BUILD="2026-11-22.1";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
@@ -999,10 +1010,15 @@ async function loadChecks(){
 function renderChecks(){
   const el = $("#chkWrap"); if(!el || !CHKD) return;
   const iss = CHKD.checks || [];
-  const issHtml = iss.length ? iss.map(i=>`<div class="rvrow"><div class="rvinfo">
+  const issHtml = iss.length ? iss.map((i,ix)=>`<div class="rvrow"><div class="rvinfo">
       <div class="title"><span class="tag" data-b="${i.level==="warn"?"unknown":"neutral"}">${
         i.level==="warn"?"Achtung":"Hinweis"}</span> ${esc(i.title)}</div>
-      <div class="note-s chk-d">${esc(i.detail)}</div></div></div>`).join("")
+      <div class="note-s chk-d">${esc(i.detail)}</div>
+      ${(i.items||[]).length ? `<details class="chk-items" ${i.items.length<=6?"open":""}>
+        <summary>${i.items.length} Buchung(en) anzeigen</summary>${chkItems(i)}</details>` : ""}
+      ${i.kind==="flows"||i.kind==="unknown" ? `<button class="chip chk-jump" data-to="${
+        i.kind==="flows"?"chkFlows":"reviewCard"}">Zur Liste ›</button>` : ""}
+      </div></div>`).join("")
     : `<div class="empty" style="padding:28px 20px"><h3>Keine Auffälligkeiten</h3>
        <p>Keine negativen Bestände, keine Doppelbuchungen, alle Umbuchungen mit Gegenstück.</p></div>`;
 
@@ -1048,7 +1064,7 @@ function renderChecks(){
 
   el.innerHTML = `<div class="sect">Datenprüfung</div><div class="card">${issHtml}</div>
     <div class="sect">Saldo-Abgleich</div><div class="card">${bcHtml}</div>
-    <div class="sect">Ein- und Auszahlungen</div><div class="card">${flHtml}</div>`;
+    <div class="sect" id="chkFlows">Ein- und Auszahlungen</div><div class="card">${flHtml}</div>`;
   wireChecks();
 }
 
@@ -1059,7 +1075,54 @@ function numIn(x){
   return x;
 }
 
+const ACC_L = {funding:"OKX Funding", trading:"OKX Trading", earn:"OKX Earn", wallet:"Trezor"};
+function srcLabel(s){
+  return s==="manual" ? "manuell erfasst" : s==="wallet_csv" ? "Bestands-CSV"
+    : s==="auto_transfer" ? "automatische Gegenbuchung" : `Import ${s}`;
+}
+function chkItems(issue){
+  let html = "", lastG = null;
+  const items = issue.items;
+  items.forEach((d, k)=>{
+    if(issue.kind==="duplicate" && d.group!==lastG){
+      html += `<div class="chk-grp">Gruppe ${d.group+1}</div>`; lastG = d.group;
+    }
+    const canDel = d.source==="manual" || d.source==="wallet_csv";
+    html += `<div class="chk-it">
+      <div class="chk-it-h"><span>${dtm(d.ts_utc)} · ${esc(TXL[d.tx_type]||d.tx_type)}</span>${
+        d.role?`<span class="tag" data-b="${d.role==="davor"?"neutral":"unknown"}">${esc(d.role)}</span>`:""}</div>
+      <div class="chk-it-a">${d.entries.map(e=>`<b class="${N(e.amount)<0?"neg":"pos"}">${nfx(e.amount)} ${
+        esc(e.asset)}</b>${e.kind!=="principal"?` <i>(${e.kind==="fee"?"Gebühr":e.kind==="funding"?"Funding":esc(e.kind)})</i>`:""}`).join(" · ")}</div>
+      <div class="chk-it-m">${esc(ACC_L[d.account]||d.account)} · ${esc((B[d.tax_bucket]||{}).s||d.tax_bucket)} · ${
+        esc(srcLabel(d.source))} · Nr. ${d.id}${d.note?`<br>${esc(d.note)}`:""}</div>
+      ${canDel?`<button class="chip chk-del" data-id="${d.id}">Diese Buchung löschen</button>`:""}
+    </div>`;
+    const next = items[k+1];
+    if(issue.kind==="duplicate" && (!next || next.group!==d.group))
+      html += `<button class="chip chk-ok" data-ids="${d.groupIds.join(",")}">Ist korrekt – nicht mehr anzeigen</button>`;
+  });
+  return html;
+}
+
 function wireChecks(){
+  document.querySelectorAll(".chk-jump").forEach(b=>b.onclick=()=>{
+    const t = document.getElementById(b.dataset.to);
+    if(t) t.scrollIntoView({behavior:"smooth", block:"start"});
+  });
+  document.querySelectorAll(".chk-del").forEach(b=>b.onclick=async ()=>{
+    if(!confirm("Diese Buchung wirklich löschen?")) return;
+    b.disabled = true;
+    try{
+      const r = await api("/api/tx-delete", {id: +b.dataset.id});
+      if(r && r.state) STATE = r.state;
+      PF = TAXR = null; await loadChecks(); refreshDerived();
+    }catch(e){ alert("Das hat nicht geklappt: " + (e.message||e)); b.disabled = false; }
+  });
+  document.querySelectorAll(".chk-ok").forEach(b=>b.onclick=async ()=>{
+    b.disabled = true;
+    try{ CHKD = await api("/api/ignore-duplicate", {ids: b.dataset.ids.split(",").map(Number)}); renderChecks(); }
+    catch(e){ alert("Das hat nicht geklappt: " + (e.message||e)); b.disabled = false; }
+  });
   const save = $("#bcSave");
   if(save) save.onclick = async ()=>{
     const okx = {}, wallet = {};

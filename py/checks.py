@@ -211,26 +211,61 @@ def balance_check(conn):
 
 # --- Automatische Pruefungen -------------------------------------------------
 
+def _tx_detail(conn, tx_id, **extra):
+    """Eine Buchung so aufbereitet, dass man sie im Pruefen-Tab wiedererkennt."""
+    t = conn.execute(
+        "SELECT id, ts_utc, tx_type, account, tax_bucket, source, external_id, note "
+        "FROM transactions WHERE id = ?", (tx_id,)).fetchone()
+    if not t:
+        return None
+    d = dict(t)
+    d["entries"] = [{"asset": e["asset"], "amount": e["amount"], "kind": e["kind"]}
+                    for e in _entries(conn, tx_id)]
+    d.update(extra)
+    return d
+
+
+def ignore_duplicate(conn, ids):
+    """Vermeintliche Doppelbuchung als korrekt markieren (z. B. zwei
+    Teilausfuehrungen derselben Order in derselben Sekunde)."""
+    ign = _state(conn, "ignored_duplicates", [])
+    key = ",".join(str(i) for i in sorted(int(x) for x in ids))
+    if key not in ign:
+        ign.append(key)
+        _set_state(conn, "ignored_duplicates", ign)
+
 def data_checks(conn):
     issues = []
 
     # 1) Negativer Bestand im Zeitverlauf -> aeltere Buchungen fehlen.
     running, first_neg = {}, {}
     for r in conn.execute(
-            """SELECT t.ts_utc, e.asset, e.amount FROM entries e
+            """SELECT t.id, t.ts_utc, e.asset, e.amount FROM entries e
                JOIN transactions t ON t.id = e.transaction_id
                ORDER BY t.ts_utc, t.id, e.id"""):
         a = r["asset"]
         running[a] = running.get(a, Decimal(0)) + L.D(r["amount"])
         if running[a] < -TOL and a not in first_neg:
-            first_neg[a] = (r["ts_utc"], running[a])
-    for a, (ts, v) in sorted(first_neg.items()):
+            first_neg[a] = (r["ts_utc"], running[a], r["id"])
+    for a, (ts, v, tid) in sorted(first_neg.items()):
+        prev = [r["id"] for r in conn.execute(
+            """SELECT DISTINCT t.id FROM transactions t JOIN entries e
+               ON e.transaction_id = t.id WHERE e.asset = ? AND
+               (t.ts_utc < ? OR (t.ts_utc = ? AND t.id < ?))
+               ORDER BY t.ts_utc DESC, t.id DESC LIMIT 3""", (a, ts, ts, tid))]
+        items = [_tx_detail(conn, tid, role="Ab hier negativ")] + \
+                [_tx_detail(conn, i, role="davor") for i in prev]
         issues.append({
+            "items": [x for x in items if x],
             "level": "warn", "kind": "negative",
             "title": f"{a}: Bestand wird am {ts[:10]} negativ ({L.dstr(v)})",
             "detail": "Es wird mehr abgegeben, als vorher zugegangen ist. Meist fehlen "
-                      "ältere Exporte (z. B. Funding History) oder Trezor-Käufe in der "
-                      "Bestands-CSV. Die Steuerrechnung ist dann unvollständig."})
+                      "ältere Exporte (z. B. Funding History mit der Einzahlung) oder "
+                      "Trezor-Käufe in der Bestands-CSV. Unten die Buchung, ab der der "
+                      "Bestand negativ wird, und die drei davor."
+                      + (" Bei EUR heißt das meist: die EUR-Einzahlung fehlt – für die "
+                         "Steuer unkritisch, für die Portfolio-Rendite nicht."
+                         if a == "EUR" else " Die Steuerrechnung ist dann unvollständig.")})
 
     # 2) Moegliche Doppelbuchungen: gleiche Sekunde, gleiche Buchungszeilen,
     #    aber unterschiedliche Vorgaenge.
@@ -241,16 +276,25 @@ def data_checks(conn):
         ents = tuple(sorted((e["asset"], L.dstr(L.D(e["amount"])), e["kind"])
                             for e in _entries(conn, t["id"])))
         sig.setdefault((t["ts_utc"], t["tx_type"], ents), []).append(t["id"])
-    dups = [ids for ids in sig.values() if len(ids) > 1]
+    ignored = set(_state(conn, "ignored_duplicates", []))
+    dups = [ids for ids in sig.values() if len(ids) > 1
+            and ",".join(str(i) for i in sorted(ids)) not in ignored]
     if dups:
+        items = []
+        for g, ids in enumerate(dups[:25]):
+            for i in ids:
+                d = _tx_detail(conn, i, group=g, groupIds=sorted(ids))
+                if d:
+                    items.append(d)
         issues.append({
             "level": "warn", "kind": "duplicate",
             "title": f"{len(dups)} mögliche Doppelbuchung(en)",
-            "detail": "Gleicher Zeitpunkt, gleiche Beträge, aber getrennt gebucht – z. B. "
-                      "dieselbe Buchung manuell und per Import erfasst. Vorgänge: "
-                      + ", ".join("/".join(f"#{i}" for i in ids) for ids in dups[:8])
-                      + (" …" if len(dups) > 8 else ""),
-            "ids": [i for ids in dups for i in ids][:40]})
+            "detail": "Gleicher Zeitpunkt, gleiche Art, gleiche Beträge – aber getrennt "
+                      "gebucht. Typisch: dieselbe Buchung manuell und per Import erfasst. "
+                      "Kann aber auch korrekt sein, z. B. zwei Teilausführungen einer Order "
+                      "in derselben Sekunde. Dann „Ist korrekt“ tippen."
+                      + (f" Angezeigt: die ersten 25 von {len(dups)}." if len(dups) > 25 else ""),
+            "items": items})
 
     # 3) Umbuchungen zwischen Funding und Trading ohne Gegenstueck.
     tr = []
@@ -281,15 +325,15 @@ def data_checks(conn):
             used.update({i, match})
     if open_:
         issues.append({
+            "items": [x for x in (_tx_detail(conn, o["id"]) for o in open_[:50]) if x],
             "level": "info", "kind": "transfer",
             "title": f"{len(open_)} Umbuchung(en) ohne Gegenstück",
             "detail": "Bei OKX erscheint eine Umbuchung zwischen Funding- und Trading-"
                       "Konto in beiden Exporten. Fehlt eine Seite, ist vermutlich eine "
                       "der beiden Dateien (Funding oder Trading History) für diesen "
                       "Zeitraum nicht importiert. Steuerlich unkritisch, aber die "
-                      "Kontostände je Konto stimmen dann nicht. Erste: "
-                      + ", ".join(f"{x['ts_utc'][:10]} {L.dstr(L.D(x['amount']))} {x['asset']}"
-                                  for x in open_[:4])})
+                      "Kontostände je Konto stimmen dann nicht."
+                      + (f" Angezeigt: die ersten 50 von {len(open_)}." if len(open_) > 50 else "")})
 
     # 4) Krypto-Ein-/Auszahlungen, die noch auf Standard stehen.
     fl = flows(conn)
@@ -297,6 +341,7 @@ def data_checks(conn):
     pending_d = [f for f in fl if f["direction"] == "deposit" and f["mode"] == "external"]
     if pending_w or pending_d:
         issues.append({
+            "items": [x for x in (_tx_detail(conn, f["id"]) for f in (pending_w + pending_d)[:50]) if x],
             "level": "info", "kind": "flows",
             "title": f"{len(pending_w) + len(pending_d)} Krypto-Ein-/Auszahlung(en) prüfen",
             "detail": "Unten unter „Ein- und Auszahlungen“ festlegen, ob es Umbuchungen "
@@ -305,7 +350,11 @@ def data_checks(conn):
 
     unknown = L.unknown_count(conn)
     if unknown:
+        uids = [r["id"] for r in conn.execute(
+            "SELECT id FROM transactions WHERE tax_bucket = 'unknown' "
+            "ORDER BY ts_utc LIMIT 50")]
         issues.append({
+            "items": [x for x in (_tx_detail(conn, i) for i in uids) if x],
             "level": "warn", "kind": "unknown",
             "title": f"{unknown} Buchung(en) ohne Steuertopf",
             "detail": "Unten unter „Unklare Buchungen“ zuordnen. Bis dahin ist der "

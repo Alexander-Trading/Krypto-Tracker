@@ -359,6 +359,10 @@ async def _route_post(path, body, conn):
         CHK.set_actual_balances(conn, okx=body.get("okx"), wallet=body.get("wallet"))
         return CHK.overview(conn)
 
+    if path == "/api/ignore-duplicate":
+        CHK.ignore_duplicate(conn, body.get("ids") or [])
+        return CHK.overview(conn)
+
     if path == "/api/flow-mode":
         CHK.set_flow_mode(conn, int(body["id"]), body["mode"])
         return {"ok": True, "overview": CHK.overview(conn), "state": build_state(conn)}
