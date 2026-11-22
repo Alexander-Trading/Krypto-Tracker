@@ -572,7 +572,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-22.8";
+const APP_BUILD="2026-11-22.9";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
@@ -885,7 +885,8 @@ function posCard(p, mk){
 
   const stats = st("Größe", nfTrim(displaySize)+" "+esc(p.base||""),
       nf(p.contracts,0)+" Kontrakte")
-    + st("Ø Einstieg", nf(entry)+" USD")
+    + st("Ø Einstieg", nf(entry)+" USD", (p.partial===true||p.partial==="True")
+        ? "Näherung – Käufe vor dem ältesten Export fehlen" : undefined)
     + st("Mark-Preis", mark?nf(mark)+" USD":"–", mark?"live":"nicht abrufbar")
     + st("Margin", nf(margin)+" "+ccy,
         "inkl. "+nf(p.funding)+" Funding"+(manualAdj!==0?" · "+sgn(manualAdj)+" manuell":""))

@@ -421,6 +421,25 @@ def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL, ct_val_map=None):
             contracts += c * side
             margin += L.D(r["Position Change"])
 
+        # Plausibilisierung gegen OKX: Jede Funding-Zeile nennt in "Amount"
+        # die Positionsgroesse in Kontrakten zu diesem Zeitpunkt. Beginnt die
+        # Datei erst nach der Eroeffnung der Position (z. B. Export ab 19.08.,
+        # Position seit Juli), fehlen Kaeufe und die Summe der Orders ist zu
+        # klein. Massgeblich ist dann: letzte Funding-Zeile + Orders danach.
+        partial = False
+        trade_contracts = contracts
+        fund_rows = [r for r in fut if "Funding fee" in (r.get("Action") or "")]
+        if fund_rows:
+            last_f = max(fund_rows, key=lambda r: (r["Time"], r.get("id", "")))
+            sign = Decimal(-1) if contracts < 0 else Decimal(1)
+            after = sum(((Decimal(1) if r["Action"].strip() == "Buy" else Decimal(-1))
+                         * L.D(r["Amount"]) for r in opens if r["Time"] > last_f["Time"]),
+                        Decimal(0))
+            okx_contracts = sign * abs(L.D(last_f["Amount"])) + after
+            if okx_contracts != contracts:
+                partial = True
+                contracts = okx_contracts
+
         if contracts == 0:
             continue  # glattgestellt, keine offene Position mehr
 
@@ -429,6 +448,10 @@ def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL, ct_val_map=None):
         fees = sum((L.D(r["Fee"]) for r in fut), Decimal(0))
         size = contracts * inst_ct_val
         latest = max(fut, key=lambda r: r["Time"])
+        if partial and (latest.get("Position Balance") or "").strip():
+            # Positionsmarge laut OKX statt der aus unvollstaendigen Orders
+            # aufsummierten Marge.
+            margin = L.D(latest["Position Balance"]) - funding
         base = inst.split("-")[0] if "-" in inst else inst
 
         out.append({
@@ -438,16 +461,45 @@ def derive_positions(rows, meta, ct_val=DEFAULT_CT_VAL, ct_val_map=None):
             "contracts": contracts,
             "size": size,
             "ct_val": inst_ct_val,
-            "avg_entry": (notional / abs(size)) if size else Decimal(0),
+            # Bei Teilhistorie: Durchschnitt der in der Datei enthaltenen Orders
+            # (Naeherung); eine gespeicherte Position aus vollstaendigerer
+            # Datei hat Vorrang (webapi).
+            "avg_entry": (notional / abs(trade_contracts * inst_ct_val))
+                         if trade_contracts else Decimal(0),
             "initial_margin": margin,
             "funding": funding,
             "fees": fees,
             "margin_balance": margin + funding,
+            "partial": partial,
             "settle_ccy": latest["Fee Unit"] or "USDC",
             "as_of": to_utc(latest["Time"], meta["tz_offset"]),
         })
 
     return sorted(out, key=lambda p: p["instrument"])
+def positions_from_db(conn, ct_val_map=None):
+    """Offene Positionen aus ALLEN importierten Trading-Zeilen (alle Dateien,
+    alle Zeitraeume) statt nur aus der gerade importierten Datei. Die
+    Originalzeilen liegen als raw-JSON an den Buchungen; die Zeit wird durch
+    den UTC-Zeitstempel der Buchung ersetzt, weil Dateien mit verschiedenen
+    Zeitzonen exportiert sein koennen."""
+    rows = []
+    for t in conn.execute(
+            """SELECT ts_utc, raw FROM transactions
+               WHERE tx_type IN ('trade_derivative', 'funding_fee') AND raw IS NOT NULL"""):
+        try:
+            r = json.loads(t["raw"])
+        except (ValueError, TypeError):
+            continue
+        if not isinstance(r, dict) or (r.get("Trade Type") or "").strip() != "Futures":
+            continue
+        r = dict(r)
+        r["Time"] = t["ts_utc"][:19].replace("T", " ")
+        rows.append(r)
+    if not rows:
+        return []
+    return derive_positions(rows, {"tz_offset": timedelta(0)}, ct_val_map=ct_val_map)
+
+
 # --- Einstieg --------------------------------------------------------------
 
 def find_duplicate_run(conn, file_sha256):
@@ -528,7 +580,12 @@ def import_file(conn, path, source=None):
                     ct_val_map[inst] = L.D(m["ctVal"])
         except (ValueError, TypeError, KeyError):
             pass
-    positions = derive_positions(rows, meta, ct_val_map=ct_val_map) if kind == "trading" else []
+    # Aus allen importierten Daten, nicht nur aus dieser Datei (sonst fehlen
+    # Kaeufe vor dem Exportzeitraum); Rueckfall auf die Datei allein.
+    positions = []
+    if kind == "trading":
+        positions = positions_from_db(conn, ct_val_map) or \
+            derive_positions(rows, meta, ct_val_map=ct_val_map)
 
     extra = {}
     if kind == "positions":

@@ -312,6 +312,15 @@ async def _route_post(path, body, conn):
         if result.get("positions"):
             ps = [{k: (str(v) if isinstance(v, Decimal) else v)
                    for k, v in p.items()} for p in result["positions"]]
+            # Datei deckt die Position nur teilweise ab (Eroeffnung vor dem
+            # Exportzeitraum): eine frueher gespeicherte Position gleicher
+            # Groesse behalten - deren Einstiegspreis stammt aus einer
+            # vollstaendigeren Datei.
+            old = {p.get("instrument"): p for p in (get_state(conn, "positions") or [])}
+            for i, p in enumerate(ps):
+                o = old.get(p["instrument"])
+                if p.get("partial") and o and L.D(o.get("contracts") or 0) == L.D(p["contracts"]):
+                    ps[i] = o
             set_state(conn, "positions", ps)
             result["positions"] = ps
         result["state"] = build_state(conn)
