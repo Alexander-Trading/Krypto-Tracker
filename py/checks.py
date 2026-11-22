@@ -366,6 +366,22 @@ def data_checks(conn):
                 cd = _tx_detail(conn, c["id"], role="in der Nähe (±24 h)")
                 if cd:
                     items.append(cd)
+        # Abdeckung je Konto: bis wann reichen die importierten Daten?
+        cov = {r["account"]: (r["a"], r["b"]) for r in conn.execute(
+            """SELECT account, MIN(ts_utc) a, MAX(ts_utc) b FROM transactions
+               WHERE source != ? AND account IN ('funding','trading','earn')
+               GROUP BY account""", (MIRROR_SOURCE,))}
+        names = {"funding": "Funding", "trading": "Trading", "earn": "Earn"}
+        cov_txt = " Importierte Daten: " + "; ".join(
+            f"{names[k]} {v[0][:10]} bis {v[1][:10]}" for k, v in sorted(cov.items())) + "." \
+            if cov else ""
+        late = [o for o in open_ if "funding" in cov and o["account"] == "trading"
+                and o["ts_utc"] > cov["funding"][1]]
+        if late:
+            cov_txt += (" Die Funding-Daten enden vor dieser Umbuchung – die Funding "
+                        "History bis heute bei OKX exportieren und importieren.")
+        elif "funding" not in cov:
+            cov_txt += " Es ist noch gar keine Funding History importiert."
         issues.append({
             "items": items,
             "level": "info", "kind": "transfer",
@@ -377,6 +393,7 @@ def data_checks(conn):
                       "Kontostände je Konto stimmen dann nicht. Unter jeder Umbuchung "
                       "stehen die Buchungen im selben Coin auf den anderen OKX-Konten "
                       "(±24 h) – daran sieht man, ob die Gegenseite anders gebucht wurde."
+                      + cov_txt
                       + (f" Angezeigt: die ersten 50 von {len(open_)}." if len(open_) > 50 else "")})
 
     # 4) Krypto-Ein-/Auszahlungen, die noch auf Standard stehen.
