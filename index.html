@@ -572,7 +572,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-22.9";
+const APP_BUILD="2026-11-22.10";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
@@ -2005,6 +2005,10 @@ function wireTax(){
     const btn = $("#btnPdf"); const old = btn.textContent;
     btn.disabled = true; btn.textContent = "Erzeuge PDF…";
     try{
+      btn.textContent = "Lade PDF-Modul (einmalig)…";
+      try{ await window.pyEnsurePdf(); }
+      catch(e){ throw new Error("PDF-Modul konnte nicht geladen werden – Internetverbindung prüfen. CSV geht immer."); }
+      btn.textContent = "Erzeuge PDF…";
       const result = await api("/api/tax?format=pdf&year="+YEAR);
       const bytes = Uint8Array.from(atob(result.__pdf_base64__), c => c.charCodeAt(0));
       downloadBlob(bytes, "application/pdf", result.__filename__ || `steuerreport-${YEAR}.pdf`);
@@ -2478,9 +2482,11 @@ async function refreshMarket(){
   if(TAB==="positions"||TAB==="dash") render();
 }
 async function refreshDerived(){
+  // Uebersicht zuerst anzeigen, die (langsamere) Steuerrechnung danach.
   try{ PF=await api("/api/portfolio"); }catch(e){ PF=null; }
-  try{ TAXR=await api("/api/tax"); }catch(e){ TAXR=null; }
   try{ FEES=await api("/api/fees"); }catch(e){ FEES=null; }
+  if(TAB==="dash") render();
+  try{ TAXR=await api("/api/tax"); }catch(e){ TAXR=null; }
   if(TAB==="dash"||TAB==="tax") render();
 }
 
@@ -2594,16 +2600,12 @@ window.pyReady = (async () => {
     // ein Blick unten in der App: Zahl aendert sich sichtbar nach jedem
     // echten Datei-Update, bleibt gleich, wenn (trotz Neu-Upload) noch der
     // alte Stand ausgeliefert wird.
-    const fileVersions = [];
-    for (const f of files) {
-      // cache:"no-store" erzwingt beim Browser selbst jedes Mal einen
-      // frischen Abruf; der Zeitstempel in der URL zusaetzlich verhindert,
-      // dass eine zwischengeschaltete CDN-Kopie (z.B. Fastly bei GitHub
-      // Pages) unter derselben URL still eine aeltere Fassung ausliefert -
-      // sonst liefert Safari/das CDN nach einem Update auf GitHub gerne noch
-      // die alte Version der .py-Dateien aus, ohne dass man das am
-      // Fehlerbild erkennen könnte.
-      const resp = await fetch("py/" + f + "?v=" + Date.now(), {cache: "no-store"});
+    // Alle Dateien parallel laden (frueher nacheinander - je Datei ein voller
+    // Netzwerk-Umlauf). cache:"no-store" + Zeitstempel: immer der aktuelle
+    // Stand, auch wenn das CDN von GitHub Pages noch eine alte Kopie haette.
+    const stamp = Date.now();
+    const texts = await Promise.all(files.map(async f => {
+      const resp = await fetch("py/" + f + "?v=" + stamp, {cache: "no-store"});
       if (!resp.ok) {
         throw new Error(
           `Datei "py/${f}" konnte nicht geladen werden (HTTP ${resp.status}). `+
@@ -2616,13 +2618,17 @@ window.pyReady = (async () => {
           `Datei "py/${f}" enthält HTML statt Python-Code - das Hosting liefert `+
           `dafür vermutlich eine Fehlerseite (404) statt der echten Datei aus.`);
       }
-      // Einfache (nicht-kryptografische) Pruefsumme reicht hier voellig - es
-      // geht nur darum, eine Aenderung sichtbar zu machen, nicht um Sicherheit.
+      return text;
+    }));
+    const fileVersions = [];
+    files.forEach((f, i) => {
+      const text = texts[i];
+      // Sichtbarer Fingerabdruck je Datei (Laenge + einfache Pruefsumme).
       let h = 0;
-      for (let i = 0; i < text.length; i++) { h = (h * 31 + text.charCodeAt(i)) >>> 0; }
+      for (let k = 0; k < text.length; k++) { h = (h * 31 + text.charCodeAt(k)) >>> 0; }
       fileVersions.push(`${f}:${text.length}:${h.toString(16)}`);
       pyodide.FS.writeFile("/" + f, text);
-    }
+    });
     const verEl = document.getElementById("codeVer");
     if (verEl) {
       let vh = 0;
@@ -2633,15 +2639,12 @@ window.pyReady = (async () => {
       verEl.onclick = () => alert(fileVersions.join("\n"));
     }
 
-    // PDF-Export: reportlab hat seit Version 5 einen reinen Python-Wheel
-    // (kein Kompilat mehr) - laesst sich also per micropip von PyPI
-    // installieren. Die einzige Abhaengigkeit, die reportlab intern immer
-    // laedt (Pillow, fuer Bildverarbeitung, auch wenn unser Report keine
-    // Bilder nutzt), ist ein von Pyodide selbst vorkompiliertes Paket -
-    // kommt vom offiziellen Pyodide-CDN (jsDelivr), nicht von PyPI.
-    // Schlaegt einer der Schritte fehl (z.B. kein Netzwerk), bleibt PDF
-    // einfach unverfuegbar - webapi.py faengt das ab, CSV geht immer.
-    try {
+    // PDF-Export: reportlab (reiner Python-Wheel von PyPI) plus Pillow (von
+    // Pyodide vorkompiliert, jsDelivr). Wird erst beim ersten PDF-Export
+    // geladen - frueher bei jedem Start, das waren mehrere MB Download und
+    // auf dem iPhone die groesste Bremse beim Oeffnen der App.
+    let pdfLibs = null;
+    window.pyEnsurePdf = () => pdfLibs || (pdfLibs = (async () => {
       await pyodide.loadPackage("pyodide-pkgs/micropip.whl");
       await pyodide.runPythonAsync(`
 import micropip
@@ -2650,11 +2653,7 @@ await micropip.install(
     "pillow-12.2.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl")
 await micropip.install("reportlab")
 `);
-    } catch (e) {
-      console.warn("PDF-Export nicht verfügbar (reportlab/Pillow konnten nicht "+
-                   "geladen werden - vermutlich kein Netzwerkzugriff auf PyPI/"+
-                   "jsDelivr von hier aus). CSV-Export bleibt unberührt.", e);
-    }
+    })().catch(e => { pdfLibs = null; throw e; }));
 
     await pyodide.runPythonAsync(`
 import sys
@@ -2699,6 +2698,16 @@ import webapi
 })();
 
 boot();
+
+// Service Worker: speichert die Python-Laufzeit (pyodide/, ~12 MB) dauerhaft
+// auf dem Geraet, damit sie beim Oeffnen nicht jedes Mal neu geprueft oder
+// geladen werden muss. index.html und py/ laufen NICHT ueber den Cache -
+// Updates kommen weiter sofort an (siehe sw.js).
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("sw.js").catch(() => {});
+  });
+}
 </script>
 </body>
 </html>

@@ -26,12 +26,20 @@ import tax as TAX
 import checks as CHK
 import okx_import as IMP
 
-try:
-    import pdf_report as PDF
-    PDF_AVAILABLE = True
-except ImportError:
-    PDF = None
-    PDF_AVAILABLE = False
+# reportlab wird erst beim ersten PDF-Export nachgeladen (index.html,
+# pyEnsurePdf) - daher hier erst bei Bedarf importieren.
+PDF = None
+
+
+def _pdf_module():
+    global PDF
+    if PDF is None:
+        try:
+            import pdf_report
+            PDF = pdf_report
+        except ImportError:
+            return None
+    return PDF
 
 DB_PATH = "/persist/tracker.db"
 
@@ -218,12 +226,11 @@ async def _route_get(path, query, conn):
         if fmt == "csv":
             return {"__csv__": TAX.report_csv(rep)}
         if fmt == "pdf":
-            if not PDF_AVAILABLE:
+            if _pdf_module() is None:
                 return {"__error__":
-                    "PDF-Export ist gerade nicht verfügbar - vermutlich konnte beim "
-                    "Laden der Seite kein Netzwerkzugriff auf PyPI/jsDelivr hergestellt "
-                    "werden (z.B. wegen einer Firewall oder eines Werbeblockers). Seite "
-                    "neu laden und nochmal versuchen, oder CSV exportieren."}
+                    "PDF-Export ist gerade nicht verfügbar - das PDF-Modul konnte nicht "
+                    "aus dem Internet geladen werden. Verbindung prüfen und nochmal "
+                    "versuchen, oder CSV exportieren."}
             years = [y["year"] for y in rep["years"]]
             if not years:
                 return {"__error__": "Keine Vorgänge für einen Report."}

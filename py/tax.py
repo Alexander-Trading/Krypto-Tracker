@@ -114,9 +114,30 @@ def day_of(ts):
 
 def cached_rate(conn, asset, day):
     row = conn.execute(
-        "SELECT eur_price FROM price_cache WHERE asset = ? AND day = ? LIMIT 1",
-        (asset, day)).fetchone()
+        "SELECT eur_price FROM price_cache WHERE asset = ? AND day = ? "
+        "AND source != 'miss' LIMIT 1", (asset, day)).fetchone()
     return L.D(row["eur_price"]) if row else None
+
+
+def recent_miss(conn, asset, day, hours=24):
+    """Hat OKX fuer dieses Paar vor kurzem keinen Kurs geliefert? Dann nicht
+    bei jedem App-Start erneut fragen (kostet auf dem iPhone Sekunden)."""
+    row = conn.execute(
+        "SELECT fetched_at FROM price_cache WHERE asset = ? AND day = ? AND source = 'miss'",
+        (asset, day)).fetchone()
+    if not row:
+        return False
+    try:
+        t = datetime.fromisoformat(row["fetched_at"].replace("Z", "+00:00"))
+    except ValueError:
+        return False
+    return (datetime.now(timezone.utc) - t).total_seconds() < hours * 3600
+
+
+def store_miss(conn, asset, day):
+    conn.execute(
+        """INSERT OR REPLACE INTO price_cache (asset, day, eur_price, source, fetched_at)
+           VALUES (?, ?, '', 'miss', ?)""", (asset, day, L.now_utc()))
 
 
 def store_rate(conn, asset, day, price, source):
@@ -176,6 +197,55 @@ async def build_rate_lookup(conn, assets, days, fetcher=None, pairs=None):
     if pairs is None:
         pairs = [(a, d) for a in assets for d in days]
     pairs = sorted({(a, d) for a, d in pairs if a != BASE})
+
+    # Abrufe vorab PARALLEL erledigen (frueher strikt nacheinander - bei ~90
+    # neuen Tageskursen auf dem iPhone viele Sekunden). Max. 6 gleichzeitig,
+    # um OKX nicht zu ueberlasten. Danach greift die Logik unten wie bisher,
+    # nur liefert "fetcher" dann das vorab geholte Ergebnis.
+    if fetcher:
+        import asyncio
+        need = []
+        for asset, day in pairs:
+            if day == today:
+                hit = _today_cache.get(asset)
+                if not (hit and time.monotonic() - hit[0] < _TODAY_TTL):
+                    need.append((asset, day))
+            elif (own.get(asset) or {}).get(day) is None and \
+                    cached_rate(conn, asset, day) is None and \
+                    not recent_miss(conn, asset, day):
+                need.append((asset, day))
+        if need:
+            sem = asyncio.Semaphore(6)
+            raw_fetcher = fetcher
+
+            async def one(a, d):
+                async with sem:
+                    try:
+                        return (a, d), await raw_fetcher(a, d)
+                    except Exception:
+                        return (a, d), None
+            got = dict(await asyncio.gather(*(one(a, d) for a, d in need)))
+            for (a, d), v in got.items():
+                if v is None and d != today:
+                    store_miss(conn, a, d)
+            skip = {(a, d) for a, d in pairs
+                    if d != today and (a, d) not in got and recent_miss(conn, a, d)}
+
+            async def fetcher(a, d):          # noqa: F811 - bewusst ueberschrieben
+                if (a, d) in got:
+                    return got[(a, d)]
+                if (a, d) in skip:
+                    return None
+                return await raw_fetcher(a, d)
+        else:
+            skip = {(a, d) for a, d in pairs if d != today and recent_miss(conn, a, d)}
+            if skip:
+                raw_fetcher = fetcher
+
+                async def fetcher(a, d):      # noqa: F811
+                    if (a, d) in skip:
+                        return None
+                    return await raw_fetcher(a, d)
 
     for asset, day in pairs:
         key = (asset, day)
