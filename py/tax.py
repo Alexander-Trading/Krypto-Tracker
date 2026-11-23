@@ -592,6 +592,42 @@ def bucket_rows(conn, bucket, year, table):
     return out
 
 
+def native_label(n):
+    """Beschriftung einer Buchungszeile im Report: was ist dieser Teil?
+    Frueher stand nur bei Gebuehren ein Zusatz - eine Positionsschliessung
+    ("254,53 USDC · -6,88 USDC (Gebühr)") las sich dann wie eine Gebuehr."""
+    amt = L.D(n["amount"])
+    kind = n.get("kind")
+    if kind == "pnl":
+        return "realisierter Gewinn" if amt >= 0 else "realisierter Verlust"
+    if kind == "fee":
+        return "Gebühr" if amt <= 0 else "Gebührenerstattung"
+    if kind == "funding":
+        return "Funding erhalten" if amt >= 0 else "Funding gezahlt"
+    return ""
+
+
+def native_text(n, places=8):
+    """'254,53305 USDC realisierter Gewinn' - deutsches Zahlenformat,
+    ueberfluessige Nullen weg."""
+    amt = L.D(n["amount"])
+    q = amt.quantize(Decimal(1).scaleb(-places)).normalize()
+    s = f"{q:f}"
+    if "." in s:
+        whole, frac = s.split(".")
+    else:
+        whole, frac = s, ""
+    neg = whole.startswith("-")
+    whole = whole.lstrip("-")
+    grouped = ""
+    while len(whole) > 3:
+        grouped = "." + whole[-3:] + grouped
+        whole = whole[:-3]
+    txt = ("-" if neg else "") + whole + grouped + ("," + frac if frac else "")
+    lab = native_label(n)
+    return f"{txt} {n['asset']}" + (f" {lab}" if lab else "")
+
+
 # --- Report ----------------------------------------------------------------
 
 def dec2str(o):
@@ -1107,7 +1143,7 @@ def report_csv(report):
             for r in y["allByBucket"].get(bucket, []):
                 native = "; ".join(
                     f"{num(n['amount'], '0.00000001')} {n['asset']}"
-                    + (" (Gebühr)" if n["kind"] == "fee" else "")
+                    + (f" ({native_label(n)})" if native_label(n) else "")
                     for n in r["native"])
                 lines.append(_csv_row([
                     yr, BUCKET_LABELS[bucket], r["date"],

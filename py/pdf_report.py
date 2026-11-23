@@ -370,10 +370,9 @@ def _par23_rows(disposals):
 
 
 def _native_str(native):
-    parts = []
-    for n in native:
-        parts.append(f"{n['amount']} {n['asset']}" + (" (Gebühr)" if n["kind"] == "fee" else ""))
-    return " · ".join(parts)
+    # Jeder Teil beschriftet: "254,53305 USDC realisierter Gewinn ·
+    # -6,87728496 USDC Gebühr" (siehe TAX.native_text)
+    return " · ".join(TAX.native_text(n) for n in native)
 
 
 def _all_rows(rows, tx_labels):
