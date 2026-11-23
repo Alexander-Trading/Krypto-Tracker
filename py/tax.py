@@ -454,6 +454,9 @@ def build_lots(conn, table):
                                 if (proceeds is not None and cost is not None) else None,
                             "year": year_of(t["ts_utc"]),
                             "note": t["note"],
+                            # Anlass der Veraeusserung (fuer Report/PDF):
+                            # Tausch, Gebuehr oder Funding in Krypto bezahlt
+                            "txType": t["tx_type"], "kind": e["kind"],
                         })
 
                     lot["qty"] -= take

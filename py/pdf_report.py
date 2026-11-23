@@ -44,7 +44,9 @@ DOWN = colors.HexColor("#C0392B")
 def _money(v):
     if v in (None, ""):
         return "–"
-    v = Decimal(str(v))
+    v = Decimal(str(v)).quantize(Decimal("0.01"))
+    if v == 0:
+        v = Decimal("0.00")          # kein "-0,00 €" bei Rundungsresten
     s = f"{v:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
     return f"{s} €"
 
@@ -359,12 +361,34 @@ def _rows_table(styles, rows_data):
     return t
 
 
+def _disposal_reason(d):
+    """Warum ist das eine Veraeusserung? Bei USDC meist kein Verkauf, sondern
+    die Hingabe fuer Funding oder Gebuehren der Futures."""
+    kind, tx = d.get("kind"), d.get("txType")
+    if kind == "funding" or tx == "funding_fee":
+        return "für Funding hingegeben"
+    if kind == "fee":
+        return "für Gebühr hingegeben"
+    if tx == "withdrawal":
+        return "an Dritte übertragen"
+    if kind == "pnl":
+        return "für Futures-Verlust hingegeben"
+    return "verkauft/getauscht"
+
+
 def _par23_rows(disposals):
     out = []
     for d in disposals:
-        sub = f"{d['held_days']} Tage gehalten · " + \
-              ("steuerpflichtig" if d["taxable"] else "steuerfrei")
-        out.append((_day(d["sold"]), f"{d['qty']} {d['asset']} verkauft", sub,
+        qty = TAX.native_text({"amount": d["qty"], "asset": d["asset"], "kind": "principal"})
+        tage = "1 Tag" if d["held_days"] == 1 else f"{d['held_days']} Tage"
+        sub = (f"Anschaffung {_day(d['acquired'])} · {tage} gehalten · "
+               + ("steuerpflichtig" if d["taxable"] else "steuerfrei")
+               + f"<br/>Anschaffungskosten {_money(d['cost_eur'])} · "
+               f"Veräußerungspreis {_money(d['proceeds_eur'])}")
+        if d.get("note"):
+            from xml.sax.saxutils import escape
+            sub += f" · {escape(d['note'])}"
+        out.append((_day(d["sold"]), f"{qty} {_disposal_reason(d)}", sub,
                     _money(d["gain_eur"])))
     return out
 
