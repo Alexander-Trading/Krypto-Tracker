@@ -24,6 +24,7 @@ from reportlab.pdfbase.pdfmetrics import stringWidth
 from reportlab.pdfgen.canvas import Canvas
 
 import tax as TAX
+import ledger as L
 
 # Dieselben Farben wie im Dashboard, damit ein Topf auf jeder Seite
 # wiederzuerkennen ist.
@@ -551,4 +552,197 @@ def build_pdf(report, year, meta_text) -> bytes:
         return _NumberedCanvas(*args, footer_text=footer_text, **kwargs)
 
     doc.build(flow, canvasmaker=_canvasmaker)
+    return buf.getvalue()
+
+
+# --- Nachweise: Bestand zum Stichtag, Herkunftsnachweis ---------------------
+
+def _num(v, places=8):
+    """Menge im deutschen Format ohne ueberfluessige Nullen."""
+    return TAX.native_text({"amount": v, "asset": "", "kind": "principal"}, places).strip()
+
+
+def _grid(styles, header, rows, widths, num_cols=()):
+    """Einfache Tabelle; Spalten in num_cols rechtsbuendig."""
+    right = ParagraphStyle("r", parent=styles["cell"], alignment=2)
+    head_r = ParagraphStyle("hr", parent=styles["cellDim"], alignment=2)
+    data = [[Paragraph(h, head_r if i in num_cols else styles["cellDim"])
+             for i, h in enumerate(header)]]
+    for r in rows:
+        data.append([Paragraph(str(c), right if i in num_cols else styles["cell"])
+                     for i, c in enumerate(r)])
+    t = Table(data, colWidths=[w * mm for w in widths], repeatRows=1)
+    t.setStyle(TableStyle([
+        ("LINEBELOW", (0, 0), (-1, 0), 0.6, LINE),
+        ("LINEBELOW", (0, 1), (-1, -1), 0.3, LINE),
+        ("TOPPADDING", (0, 0), (-1, -1), 3), ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+        ("LEFTPADDING", (0, 0), (-1, -1), 2), ("RIGHTPADDING", (0, 0), (-1, -1), 2),
+        ("VALIGN", (0, 0), (-1, -1), "TOP"),
+    ]))
+    return t
+
+
+def _doc(title, footer):
+    buf = BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=18 * mm, rightMargin=18 * mm,
+                            topMargin=18 * mm, bottomMargin=22 * mm, title=title)
+
+    def maker(*a, **k):
+        return _NumberedCanvas(*a, footer_text=footer, **k)
+    return buf, doc, maker
+
+
+def build_holdings_pdf(h, meta_text="") -> bytes:
+    """Bestandsnachweis zum Stichtag (z. B. 31.12.)."""
+    styles = _styles()
+    day = _day(h["date"])
+    buf, doc, maker = _doc(f"Bestand Kryptowerte {day}",
+                           f"Krypto-Tracker · Bestand zum {day} · erstellt "
+                           f"{h['generatedAt'][:16].replace('T', ' ')}")
+    f = [Paragraph("KRYPTOWERTE · BESTANDSNACHWEIS", styles["eyebrow"]),
+         Paragraph(f"Bestand zum {day}", styles["title"]),
+         Paragraph(meta_text or "Stand jeweils zum Tagesende (UTC).", styles["sub"])]
+
+    f.append(Paragraph("Bestand je Verwahrort", styles["h2"]))
+    f.append(Spacer(1, 4))
+    f.append(_grid(styles, ["Verwahrort", "Kryptowert", "Menge", "Kurs (EUR)", "Wert (EUR)"],
+                   [(r["place"], r["asset"], _num(r["qty"]),
+                     "–" if r["asset"] == "EUR" else (_money(r["rate"]) if r["rate"] else "–"),
+                     _money(r["value"])) for r in h["rows"]],
+                   [30, 30, 40, 32, 38], num_cols=(2, 3, 4)))
+    f.append(Spacer(1, 6))
+    f.append(_kv_table(styles, [("Gesamtwert zum Stichtag", _money(h["totalValue"]))]))
+    f.append(Spacer(1, 12))
+
+    f.append(Paragraph("Je Kryptowert mit Anschaffungskosten (FIFO)", styles["h2"]))
+    f.append(Spacer(1, 4))
+    rows = []
+    for a in h["assets"]:
+        if a["asset"] == "EUR":
+            continue
+        cost = a.get("cost")
+        diff = (L.D(a["value"]) - L.D(cost)) if (cost not in (None, "") and a["priced"]) else None
+        rows.append((a["asset"], _num(a["qty"]), _money(cost), _money(a["value"]),
+                     _money(diff)))
+    f.append(_grid(styles, ["Kryptowert", "Menge", "Anschaffungskosten", "Wert",
+                            "nicht realisiert"], rows, [28, 40, 36, 33, 33], num_cols=(1, 2, 3, 4)))
+    f.append(Spacer(1, 12))
+
+    lots = [l for l in h["openLots"] if l["asset"] != "EUR"]
+    if lots:
+        f.append(Paragraph("Offene Anschaffungen (FIFO-Lots) zum Stichtag", styles["h2"]))
+        f.append(Spacer(1, 4))
+        f.append(_grid(styles, ["Anschaffung", "Kryptowert", "Menge", "Anschaffungskosten",
+                                "Haltefrist endet"],
+                       [(_day(l["acquired"]), l["asset"], _num(l["qty"]), _money(l["cost_eur"]),
+                         ("abgelaufen" if l.get("tax_free") else _day(l["free_on"])))
+                        for l in lots],
+                       [28, 28, 40, 38, 36], num_cols=(2, 3)))
+        f.append(Spacer(1, 10))
+
+    notes = ["Bewertung zum EUR-Tageskurs des Stichtags (OKX). Anschaffungskosten nach FIFO "
+             "über alle Konten, Gebühren eingerechnet.",
+             "Offene Futures-Positionen: die hinterlegte Marge ist im USDC-Bestand enthalten, "
+             "nicht realisierte Gewinne/Verluste der Positionen nicht."]
+    if h.get("missingRates"):
+        notes.append("Ohne Kurs: " + ", ".join(h["missingRates"]) + ".")
+    for n in notes:
+        f.append(Paragraph(n, styles["note"]))
+        f.append(Spacer(1, 2))
+    doc.build(f, canvasmaker=maker)
+    return buf.getvalue()
+
+
+def build_origin_pdf(o, meta_text="") -> bytes:
+    """Herkunftsnachweis (Mittelherkunft) fuer Bank/Finanzamt."""
+    styles = _styles()
+    day = _day(o["until"])
+    buf, doc, maker = _doc("Herkunftsnachweis Kryptowerte",
+                           f"Krypto-Tracker · Herkunftsnachweis bis {day} · erstellt "
+                           f"{o['generatedAt'][:16].replace('T', ' ')}")
+    f = [Paragraph("KRYPTOWERTE · HERKUNFTSNACHWEIS", styles["eyebrow"]),
+         Paragraph("Herkunft der Mittel", styles["title"]),
+         Paragraph((meta_text + " · " if meta_text else "") + f"Zeitraum bis {day}", styles["sub"])]
+
+    # 1. Zusammenfassung / Abstimmung
+    f.append(Paragraph("1. Zusammenfassung", styles["h2"]))
+    f.append(Spacer(1, 4))
+    lines = [("Eingezahlt in EUR (Bankkonto → OKX)", _money(o["sumIn"])),
+             ("Mitgebrachte Kryptowerte (Trezor, Einstandswert)", _money(o["sumWallet"])),
+             ("Ausgezahlt in EUR (OKX → Bankkonto)", _money(-L.D(o["sumOut"]))),
+             ("Realisiertes Ergebnis (alle Jahre, siehe 4.)", _money(o["realized"])),
+             ("Nicht realisiertes Ergebnis und Rundung", _money(o["unrealizedAndOther"])),
+             (f"Wert am {day}", _money(o["valueNow"]))]
+    f.append(_kv_table(styles, lines))
+    f.append(Spacer(1, 4))
+    f.append(Paragraph(
+        "Abstimmung: Eingezahlt + mitgebrachte Kryptowerte − Ausgezahlt + realisiertes und "
+        "nicht realisiertes Ergebnis = heutiger Wert. Die Mittel stammen damit aus den "
+        "unter 2. aufgeführten Einzahlungen von eigenem Bankkonto, den unter 3. "
+        "aufgeführten Kryptowerten sowie den Ergebnissen unter 4.", styles["note"]))
+    f.append(Spacer(1, 12))
+
+    # 2. Einzahlungen / Auszahlungen EUR
+    f.append(Paragraph("2. Ein- und Auszahlungen in EUR", styles["h2"]))
+    f.append(Spacer(1, 4))
+    ein = [(_day(r["ts_utc"][:10]), "Einzahlung", r.get("note") or "OKX Funding",
+            _money(r["amount"])) for r in o["eurIn"]]
+    aus = [(_day(r["ts_utc"][:10]), "Auszahlung", r.get("note") or "OKX Funding",
+            _money(r["amount"])) for r in o["eurOut"]]
+    rows = sorted(ein + aus, key=lambda r: r[0][6:] + r[0][3:5] + r[0][:2])
+    if rows:
+        f.append(_grid(styles, ["Datum", "Vorgang", "Konto / Hinweis", "Betrag"], rows,
+                       [26, 28, 80, 36], num_cols=(3,)))
+    else:
+        f.append(Paragraph("Keine EUR-Ein- oder Auszahlungen erfasst.", styles["note"]))
+    f.append(Spacer(1, 12))
+
+    # 3. Kryptowerte von außen
+    f.append(Paragraph("3. Mitgebrachte und übertragene Kryptowerte", styles["h2"]))
+    f.append(Spacer(1, 4))
+    rows = [(_day(r["ts_utc"][:10]), "Trezor-Bestand (Kauf)", f"{_num(r['amount'])} {r['asset']}",
+             _money(r["eur_value"])) for r in o["walletLots"]]
+    rows += [(_day(r["ts_utc"][:10]), "Einzahlung zu OKX", f"{_num(r['amount'])} {r['asset']}", "–")
+             for r in o["cryptoIn"]]
+    rows += [(_day(r["ts_utc"][:10]), "Auszahlung von OKX", f"{_num(r['amount'])} {r['asset']}", "–")
+             for r in o["cryptoOut"]]
+    if rows:
+        f.append(_grid(styles, ["Datum", "Vorgang", "Menge", "Einstandswert"], rows,
+                       [26, 50, 58, 36], num_cols=(2, 3)))
+    else:
+        f.append(Paragraph("Keine Kryptowerte von außen eingebracht oder abgezogen.", styles["note"]))
+    f.append(Spacer(1, 12))
+
+    # 4. Ergebnisse je Jahr
+    f.append(Paragraph("4. Realisierte Ergebnisse je Jahr", styles["h2"]))
+    f.append(Spacer(1, 4))
+    f.append(_grid(styles, ["Jahr", "§ 23 EStG", "§ 20 EStG (Futures)", "§ 22 Nr. 3 EStG", "Summe"],
+                   [(str(y["year"]), _money(y["par23"]), _money(y["par20"]), _money(y["par22"]),
+                     _money(L.D(y["par23"]) + L.D(y["par20"]) + L.D(y["par22"])))
+                    for y in o["years"]],
+                   [20, 36, 40, 38, 36], num_cols=(1, 2, 3, 4)))
+    f.append(Spacer(1, 3))
+    f.append(Paragraph("§ 23 hier nur steuerpflichtige Veräußerungen; steuerfreie (nach Ablauf "
+                       "der Haltefrist) sind im nicht realisierten Ergebnis bzw. im Bestand "
+                       "enthalten. Details je Vorgang: Steuerreport des jeweiligen Jahres.",
+                       styles["note"]))
+    f.append(Spacer(1, 12))
+
+    # 5. Bestand heute
+    h = o["holdings"]
+    f.append(Paragraph(f"5. Bestand am {day}", styles["h2"]))
+    f.append(Spacer(1, 4))
+    rows = [(r["place"], r["asset"], _num(r["qty"]), _money(r["value"])) for r in h["rows"]]
+    for p in o.get("openPositions") or []:
+        rows.append(("OKX", f"offene Position {p['instrument']}",
+                     f"nicht realisiert {_num(p['upnlUsdc'], 2)} USDC"
+                     + (" (geschätzt)" if p.get("estimate") else ""), _money(p["upnlEur"])))
+    f.append(_grid(styles, ["Verwahrort", "Kryptowert", "Menge", "Wert (EUR)"], rows,
+                   [30, 56, 48, 36], num_cols=(2, 3)))
+    f.append(Spacer(1, 12))
+    f.append(Paragraph(
+        "Erstellt aus den Kontoauszügen (Exporte) der Börse OKX und dem dokumentierten "
+        "Bestand der Hardware-Wallet. Die zugrunde liegenden Exportdateien können auf "
+        "Anfrage vorgelegt werden.", styles["note"]))
+    doc.build(f, canvasmaker=maker)
     return buf.getvalue()

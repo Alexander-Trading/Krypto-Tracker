@@ -24,6 +24,7 @@ import ledger as L
 import market as MK
 import tax as TAX
 import checks as CHK
+import statements as ST
 import okx_import as IMP
 
 # reportlab wird erst beim ersten PDF-Export nachgeladen (index.html,
@@ -246,6 +247,30 @@ async def _route_get(path, query, conn):
                     "__filename__": f"steuerreport-{year}.pdf"}
         return rep
 
+    if path == "/api/statement":
+        # kind=holdings&date=YYYY-MM-DD  bzw.  kind=origin[&date=...]
+        kind = (q.get("kind") or ["holdings"])[0]
+        until = (q.get("date") or [""])[0] or None
+        fmt = (q.get("format") or [""])[0]
+        if kind == "origin":
+            data = await ST.origin_report(conn, fetcher=MK.eur_rate_on, until=until)
+        else:
+            from datetime import date as _d
+            data = await ST.holdings_at(
+                conn, until or f"{_d.today().year - 1}-12-31", fetcher=MK.eur_rate_on)
+        if fmt != "pdf":
+            return data
+        if _pdf_module() is None:
+            return {"__error__": "PDF-Modul nicht verfügbar - Verbindung prüfen und nochmal versuchen."}
+        import base64
+        if kind == "origin":
+            body = PDF.build_origin_pdf(data)
+            name = f"herkunftsnachweis-{data['until']}.pdf"
+        else:
+            body = PDF.build_holdings_pdf(data)
+            name = f"bestand-{data['date']}.pdf"
+        return {"__pdf_base64__": base64.b64encode(body).decode("ascii"), "__filename__": name}
+
     if path == "/api/journal":
         return await TAX.journal(conn, fetcher=MK.eur_rate_on)
 
@@ -254,6 +279,9 @@ async def _route_get(path, query, conn):
 
     if path == "/api/fees":
         return TAX.fees_summary(conn)
+
+    if path == "/api/funding":
+        return await TAX.funding_analysis(conn, fetcher=MK.eur_rate_on)
 
     if path == "/api/losscarry":
         return {"items": [dict(r) for r in conn.execute(

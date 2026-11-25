@@ -328,7 +328,7 @@ def to_eur(table, asset, day, amount):
 
 # --- FIFO ------------------------------------------------------------------
 
-def build_lots(conn, table):
+def build_lots(conn, table, until=None):
     """Laeuft chronologisch durch alle Zugaenge und Abgaenge und fuehrt je
     Asset eine FIFO-Schlange. Gibt Veraeusserungen und offene Lots zurueck.
 
@@ -344,10 +344,13 @@ def build_lots(conn, table):
     disposals = []
     warnings = []
 
+    # until (YYYY-MM-DD): nur Buchungen bis Ende dieses Tages (UTC) - fuer
+    # Bestandsberichte zum Stichtag (z. B. 31.12.).
     rows = conn.execute(
         """SELECT t.id, t.ts_utc, t.tx_type, t.tax_bucket, t.note, t.account
-           FROM transactions t
-           ORDER BY t.ts_utc, t.id""").fetchall()
+           FROM transactions t WHERE t.ts_utc <= ?
+           ORDER BY t.ts_utc, t.id""",
+        ((until + "T23:59:59Z") if until else "9999",)).fetchall()
 
     transferred_out = []   # Auszahlungen auf eigene Wallets (keine Veraeusserung)
 
@@ -481,7 +484,8 @@ def build_lots(conn, table):
             "ändern: Umbuchung mit Kaufdaten oder Zahlung an Dritte.")
 
     open_lots = []
-    today = datetime.now(timezone.utc).date()
+    today = (datetime.fromisoformat(until).date() if until
+             else datetime.now(timezone.utc).date())
     for asset, q in lots.items():
         for lot in q:
             if lot["qty"] <= 0:
@@ -1060,6 +1064,85 @@ def fees_summary(conn):
     })
 
 
+
+
+# --- Funding-Kosten ----------------------------------------------------------
+
+async def funding_analysis(conn, fetcher=None, today=None):
+    """Was kosten die Perpetuals an Funding? Je Instrument und Monat, dazu die
+    laufende Rate (7/30 Tage) hochgerechnet aufs Jahr. Betraege in der
+    Abrechnungswaehrung (USDC) und in EUR zum Tageskurs.
+
+    Positiv = erhalten, negativ = gezahlt."""
+    rows = conn.execute(
+        """SELECT t.ts_utc, t.note, e.asset, e.amount FROM entries e
+           JOIN transactions t ON t.id = e.transaction_id
+           WHERE e.kind = 'funding' ORDER BY t.ts_utc""").fetchall()
+    if not rows:
+        return {"instruments": [], "months": [], "total": None}
+    pairs = sorted({(r["asset"], day_of(r["ts_utc"])) for r in rows if r["asset"] != BASE})
+    table, missing, _ = await build_rate_lookup(conn, set(), set(), fetcher=fetcher, pairs=pairs)
+
+    today = today or datetime.now(timezone.utc).date()
+    d7, d30 = (today - timedelta(days=7)).isoformat(), (today - timedelta(days=30)).isoformat()
+    D0 = Decimal(0)
+
+    def blank():
+        return {"paid": D0, "received": D0, "net": D0, "netEur": D0, "count": 0,
+                "net7": D0, "net30": D0, "net7Eur": D0, "net30Eur": D0,
+                "first": None, "last": None, "unpriced": 0, "asset": None}
+
+    inst, months, total = {}, {}, blank()
+    for r in rows:
+        amt, day = L.D(r["amount"]), day_of(r["ts_utc"])
+        sym = (r["note"] or "").split(" ")[0] or "unbekannt"
+        eur = to_eur(table, r["asset"], day, amt)
+        for agg in (inst.setdefault(sym, blank()), total):
+            agg["asset"] = r["asset"]
+            agg["count"] += 1
+            agg["net"] += amt
+            if amt < 0:
+                agg["paid"] += -amt
+            else:
+                agg["received"] += amt
+            if eur is None:
+                agg["unpriced"] += 1
+            else:
+                agg["netEur"] += eur
+            if day > d30:
+                agg["net30"] += amt
+                agg["net30Eur"] += eur or D0
+            if day > d7:
+                agg["net7"] += amt
+                agg["net7Eur"] += eur or D0
+            agg["first"] = agg["first"] or day
+            agg["last"] = day
+        m = months.setdefault(day[:7], {"month": day[:7], "net": D0, "netEur": D0, "count": 0})
+        m["net"] += amt
+        m["netEur"] += eur or D0
+        m["count"] += 1
+
+    def finish(a, sym=None):
+        days = (date.fromisoformat(a["last"]) - date.fromisoformat(a["first"])).days + 1
+        # Hochrechnung aufs Jahr aus den letzten 30 Tagen (bzw. weniger, wenn
+        # die Daten kuerzer sind); "laufende" Kosten, nicht der Durchschnitt
+        # seit Beginn.
+        span30 = min(30, max(1, (today - date.fromisoformat(a["first"])).days))
+        return {**a, "instrument": sym, "days": days,
+                "perDayEur": a["netEur"] / days if days else D0,
+                "annual30Eur": a["net30Eur"] * Decimal(365) / Decimal(span30),
+                "annual30": a["net30"] * Decimal(365) / Decimal(span30),
+                "stale": a["last"] < d30}
+
+    from datetime import date
+    out = [finish(a, k) for k, a in sorted(inst.items(), key=lambda kv: kv[1]["net"])]
+    return dec2str({
+        "instruments": out,
+        "months": [months[k] for k in sorted(months)],
+        "total": finish(total, "Gesamt"),
+        "asOf": today.isoformat(),
+        "missingRates": missing[:10],
+    })
 
 
 # --- CSV -------------------------------------------------------------------

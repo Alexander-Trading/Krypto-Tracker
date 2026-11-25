@@ -10,7 +10,7 @@ from decimal import Decimal
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "py"))
-import ledger as L, okx_import as IMP, tax as TAX, webapi as W, checks as CHK
+import ledger as L, okx_import as IMP, tax as TAX, webapi as W, checks as CHK, statements as ST
 
 CSV = """Datum,Asset,Menge,EUR-Kosten,Herkunft
 2021-01-10,BTC,0.5,10000.00,Testboerse A
@@ -341,6 +341,29 @@ async def neue_funktionen():
          "Balance": "27.3852", "Balance Unit": "USDC"},
     ]
     assert IMP.foreign_pot_transfers(rows) == {"2"}
+
+    # Funding-Auswertung, Bestand zum Stichtag, Herkunftsnachweis
+    from datetime import date as _date
+    c = fresh()
+    _tx(c, "2026-01-05T10:00:00Z", "deposit", "funding", "neutral", [L.Entry("EUR", "1000")], "d1")
+    _tx(c, "2026-01-06T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("EUR", "-1000"), L.Entry("USDC", "1100")], "s1")
+    for k, day in enumerate(("2026-01-10", "2026-01-20", "2026-02-02")):
+        L.add_transaction(c, L.Transaction(ts_utc=day + "T08:00:00Z", tx_type="funding_fee",
+            account="trading", tax_bucket="par20", source="t", external_id=f"f{k}",
+            note="BTC-USD-PERP Funding fee expense", entries=[L.Entry("USDC", "-10", "funding")]))
+    fa = await TAX.funding_analysis(c, fetcher=None, today=_date(2026, 2, 5))
+    assert D(fa["total"]["net"]) == D(-30) and fa["instruments"][0]["instrument"] == "BTC-USD-PERP", fa
+    assert D(fa["total"]["net30"]) == D(-30) and D(fa["total"]["net7"]) == D(-10)
+    assert len(fa["months"]) == 2
+    h = await ST.holdings_at(c, "2026-01-31")
+    usdc = next(a for a in h["assets"] if a["asset"] == "USDC")
+    assert D(usdc["qty"]) == D(1080), usdc
+    assert abs(D(usdc["cost"]) - D(1000) * D(1080) / D(1100)) < D("0.01"), usdc
+    o = await ST.origin_report(c, until="2026-02-05")
+    assert D(o["sumIn"]) == D(1000) and len(o["eurIn"]) == 1
+    # Abstimmung: Wert = Einzahlung + realisiert + nicht realisiert
+    assert abs(D(o["valueNow"]) - (D(o["sumIn"]) + D(o["resultTotal"]))) < D("0.000001")
     print("Neue Funktionen OK")
 
 

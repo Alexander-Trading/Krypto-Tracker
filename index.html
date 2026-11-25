@@ -83,6 +83,17 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .td-row .td-v.pos{color:var(--up)} .td-row .td-v.neg{color:var(--down)}
 .td-row.free{opacity:.6}
 .td-more{display:block;margin:12px auto 0}
+.fund-months{padding:4px 20px 8px}
+.fund-m{display:grid;grid-template-columns:44px 1fr auto;gap:10px;align-items:center;
+  font-family:var(--mono);font-size:11.5px;padding:3px 0}
+.fund-ml{color:var(--faint)}
+.fund-bar{height:8px;border-radius:4px;background:var(--line);overflow:hidden}
+.fund-bar i{display:block;height:100%;border-radius:4px}
+.fund-bar i.neg{background:var(--down)} .fund-bar i.pos{background:var(--up)}
+.fund-mv{text-align:right;white-space:nowrap}
+.fund-cmp{margin-top:6px}
+.fund-cmp .tbd-row span:first-child{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
+#panel .card > .decl-h{padding:14px 20px 4px;font-size:13px;font-weight:600}
 .decl .decl-h{padding:14px 20px 4px;font-size:13px;font-weight:600}
 .decl .decl-n{padding:0 20px 6px}
 .decl{padding-bottom:10px}
@@ -572,7 +583,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-23.1";
+const APP_BUILD="2026-11-25.2";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
@@ -859,7 +870,102 @@ function positions(){
     <h3>Keine offene Position</h3><p>Positionen kommen aus der Trading History.
     Fehlt eine, liegt sie vermutlich nach dem Enddatum deines Exports.</p>
     <button class="act primary" onclick="go('import')">Zum Import</button></div></div>`;
-  return ps.map((p,i)=>posCard(p,(MARKET||[])[i])).join("");
+  return ps.map((p,i)=>posCard(p,(MARKET||[])[i])).join("") + fundingCard();
+}
+
+/* ===== Funding-Kosten ===== */
+let FUND = null, FUND_LOADING = false;
+let FUND_RATE = "2";
+try{ FUND_RATE = localStorage.getItem("kt-fund-rate") || "2"; }catch(e){}
+
+async function loadFunding(force){
+  if(FUND_LOADING || (FUND && !force)) return;
+  FUND_LOADING = true;
+  try{ FUND = await api("/api/funding"); }catch(e){ FUND = {error: String(e.message||e)}; }
+  FUND_LOADING = false;
+  if(TAB==="positions") render();
+}
+
+function fundingCard(){
+  if(!FUND){ loadFunding(); return `<div class="sect">Funding-Kosten</div>
+    <div class="card"><div class="empty"><p>Berechne Funding-Kosten…</p></div></div>`; }
+  if(FUND.error) return `<div class="sect">Funding-Kosten</div><div class="card"><div class="empty"><p>${esc(FUND.error)}</p></div></div>`;
+  if(!FUND.total) return "";
+  const t = FUND.total;
+  const e2 = v => eur(Math.abs(N(v)));
+  const dir = v => N(v) <= 0 ? "gezahlt" : "erhalten";
+  const dl = (l, v, c) => `<div class="tbd-row ${c||""}"><span>${l}</span><span>${v}</span></div>`;
+  const ps = STATE.positions||[];
+
+  // Je Instrument; bei offener Position: Kosten in % p.a. vom Positionswert
+  // und Vergleich mit einem Spot-Kauf derselben Menge.
+  const inst = FUND.instruments.map(i=>{
+    const k = ps.findIndex(p=>p.instrument===i.instrument);
+    const p = k>=0 ? ps[k] : null, mk = k>=0 ? (MARKET||[])[k] : null;
+    const mark = mk && !mk.error && mk.markPrice ? N(mk.markPrice) : null;
+    const notional = p && mark ? Math.abs(N(p.size)) * mark : null;     // USD ≈ USDC
+    const pct = notional ? -N(i.annual30) / notional * 100 : null;
+    let cmp = "";
+    if(notional){
+      const margin = N(p.margin_balance) || 0;
+      const extra = Math.max(0, notional - margin);
+      const rate = N(FUND_RATE.replace(",", ".")) || 0;
+      const interest = extra * rate / 100;
+      const fundYear = -N(i.annual30);
+      cmp = `<div class="fund-cmp">
+        <div class="decl-h" style="padding:10px 0 4px">Vergleich mit Spot-Kauf derselben Menge</div>
+        <div class="td-sum" style="padding:0">
+          ${dl("Positionswert", nf(notional)+" USDC")}
+          ${dl("Eingesetzte Marge", nf(margin)+" USDC")}
+          ${dl("Mehrkapital für Spot", nf(extra)+" USDC")}
+          ${dl(`Entgangene Zinsen darauf bei <input class="mini" id="fundRate" inputmode="decimal" value="${esc(FUND_RATE)}" style="width:52px"> % p.a.`, nf(interest)+" USDC/Jahr")}
+          ${dl("Funding (hochgerechnet, letzte 30 Tage)", (fundYear>=0?"":"−")+nf(Math.abs(fundYear))+" USDC/Jahr", "total")}
+        </div>
+        <div class="note-s chk-d">${fundYear > interest
+          ? `Beim aktuellen Funding kostet die Position rund ${nf(fundYear-interest)} USDC/Jahr mehr als ein Spot-Kauf inkl. entgangener Zinsen.`
+          : `Beim aktuellen Funding ist die Position günstiger als ein Spot-Kauf inkl. entgangener Zinsen (Vorteil rund ${nf(interest-fundYear)} USDC/Jahr).`}
+          Steuerlich: Futures-Ergebnis inkl. Funding nach § 20 EStG (Abgeltungsteuer 25 % zzgl. Soli);
+          Spot-Kauf nach § 23 EStG – nach einem Jahr Haltedauer steuerfrei. Funding schwankt stark;
+          die Hochrechnung ist eine Momentaufnahme.</div></div>`;
+    }
+    return `<div class="rvrow" style="display:block"><div class="title">${esc(i.instrument)}${
+        i.stale?` <span class="tag" data-b="neutral">kein Funding mehr seit ${day(i.last)}</span>`:""}</div>
+      <div class="td-sum" style="padding:6px 0 0">
+        ${dl(`Seit ${day(i.first)}`, `${nfx(i.net)} ${esc(i.asset||"USDC")}`)}
+        ${dl(`in EUR (${i.days} Tage)`, `${e2(i.netEur)} ${dir(i.netEur)}`)}
+        ${dl("Letzte 30 Tage", `${nfx(i.net30)} ${esc(i.asset||"USDC")}`)}
+        ${i.stale?"":dl("Hochgerechnet aufs Jahr", `${nfx(i.annual30)} ${esc(i.asset||"USDC")}`)}
+        ${pct!=null?dl("Entspricht p.a. vom Positionswert", (pct>=0?"":"+")+Math.abs(pct).toFixed(2).replace(".",",")+" %"+(pct>=0?" Kosten":" Ertrag")):""}
+      </div>${cmp}</div>`;
+  }).join("");
+
+  const maxM = Math.max(1, ...FUND.months.map(m=>Math.abs(N(m.netEur))));
+  const months = FUND.months.slice(-12).map(m=>`<div class="fund-m">
+      <span class="fund-ml">${m.month.slice(5)}/${m.month.slice(2,4)}</span>
+      <span class="fund-bar"><i class="${N(m.netEur)<0?"neg":"pos"}" style="width:${Math.abs(N(m.netEur))/maxM*100}%"></i></span>
+      <span class="fund-mv">${N(m.netEur)<0?"−":"+"}${eur(Math.abs(N(m.netEur)))}</span></div>`).join("");
+
+  return `<div class="sect">Funding-Kosten</div>
+    <div class="card">
+      <div class="td-sum" style="padding-top:14px">
+        ${dl(`Gesamt seit ${day(t.first)}`, `${e2(t.netEur)} ${dir(t.netEur)}`, "total")}
+        ${dl("Gezahlt / erhalten", `${nfx(t.paid)} / ${nfx(t.received)} ${esc(t.asset||"USDC")}`)}
+        ${dl("Ø pro Tag", e2(t.perDayEur))}
+        ${dl("Letzte 30 Tage", `${e2(t.net30Eur)} ${dir(t.net30Eur)}`)}
+        ${dl("Hochgerechnet aufs Jahr (aus 30 Tagen)", `${e2(t.annual30Eur)} ${dir(t.annual30Eur)}`)}
+      </div>
+      <div class="decl-h">Je Monat</div><div class="fund-months">${months}</div>
+      <div class="decl-h">Je Instrument</div>${inst}
+      <div class="note" style="padding:10px 20px 14px">EUR zum Tageskurs der Zahlung. Funding ist Teil des
+        § 20-Ergebnisses und mindert es.</div>
+    </div>`;
+}
+
+function wireFunding(){
+  const r = $("#fundRate");
+  if(r) r.onchange = ()=>{ FUND_RATE = r.value.trim() || "0";
+    try{ localStorage.setItem("kt-fund-rate", FUND_RATE); }catch(e){}
+    render(); };
 }
 
 function posCard(p, mk){
@@ -1577,6 +1683,7 @@ function taxPanel(){
     ${declCard}
     ${carryCard}
     ${simCard}
+    ${statementsCard()}
     <div class="sect">Offene Bestände und Haltefristen</div>
     <div class="note" style="padding:0 20px 10px">Je Asset zusammengefasst - der nächste
       Zukauf, der steuerfrei wird, bestimmt den Balken (FIFO: ältester Rest zuerst). Die
@@ -1947,7 +2054,7 @@ function render(){
       loadRecent();
     }
   }
-  else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); wireMarginAdjust(); }
+  else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); wireMarginAdjust(); wireFunding(); }
   else if(TAB==="journal"){ p.innerHTML=journalPanel(); loadJournal(); }
   else if(TAB==="tx"){ p.innerHTML=txPanel(); wireTx(); loadTx(false); }
   else if(TAB==="review"){ p.innerHTML=reviewPanel(); loadReview(); }
@@ -1993,6 +2100,7 @@ function managePosAutoRefresh(){
 function wireTax(){
   document.querySelectorAll(".ychip").forEach(c=>c.onclick=()=>{YEAR=+c.dataset.y;render();});
   wireSim();
+  wireStatements();
   document.querySelectorAll(".taxcard[data-b]").forEach(card=>{
     if(!card.querySelector(".tx-more"))
       card.insertAdjacentHTML("beforeend", `<div class="tx-more">Buchungen anzeigen ›</div>`);
@@ -2218,6 +2326,43 @@ async function handleLotsFile(f){
     $("#impLotsResult").innerHTML=`<div class="card" style="margin-top:12px">
       <div class="warn"><b>Das hat nicht geklappt</b>${esc(e.message||e)}</div></div>`;
   }
+}
+
+/* ===== Nachweise: Bestand zum Stichtag, Herkunftsnachweis ===== */
+function statementsCard(){
+  const today = new Date().toISOString().slice(0,10);
+  const def = `${YEAR}-12-31` > today ? today : `${YEAR}-12-31`;
+  return `<div class="sect">Nachweise</div>
+    <div class="card"><div class="sim-f">
+      <label>Stichtag<input class="mini" id="stDate" type="date" value="${def}" max="${today}"></label>
+      <button class="act" id="stHold">Bestand zum Stichtag (PDF)</button>
+      <button class="act" id="stOrigin">Herkunftsnachweis (PDF)</button>
+    </div>
+    <div class="note" style="padding:0 20px 16px"><b>Bestand:</b> Kryptowerte je Verwahrort zum Tagesende,
+      Wert zum Tageskurs, Anschaffungskosten und offene Haltefristen – z. B. zum 31.12. für die eigenen Unterlagen.
+      <b>Herkunftsnachweis:</b> woher das Geld stammt (Einzahlungen, mitgebrachte Coins), was daraus geworden ist
+      (Ergebnisse je Jahr) und was heute da ist, mit Abstimmung – etwa für die Bank.</div></div>`;
+}
+
+function wireStatements(){
+  const run = async (btn, kind) => {
+    const old = btn.textContent; btn.disabled = true;
+    try{
+      btn.textContent = "Lade PDF-Modul…";
+      try{ await window.pyEnsurePdf(); }
+      catch(e){ throw new Error("PDF-Modul konnte nicht geladen werden – Internetverbindung prüfen."); }
+      btn.textContent = "Erzeuge PDF…";
+      const d = $("#stDate").value;
+      const r = await api(`/api/statement?kind=${kind}&format=pdf${d?`&date=${d}`:""}`);
+      if(r.__error__) throw new Error(r.__error__);
+      const bytes = Uint8Array.from(atob(r.__pdf_base64__), c => c.charCodeAt(0));
+      downloadBlob(bytes, "application/pdf", r.__filename__);
+    }catch(e){ alert("PDF konnte nicht erzeugt werden: " + (e.message||e)); }
+    finally{ btn.disabled = false; btn.textContent = old; }
+  };
+  const h = $("#stHold"), o = $("#stOrigin");
+  if(h) h.onclick = ()=>run(h, "holdings");
+  if(o) o.onclick = ()=>run(o, "origin");
 }
 
 /* ===== Verkaufs-Simulator ===== */
@@ -2496,7 +2641,8 @@ async function refreshDerived(){
   try{ FEES=await api("/api/fees"); }catch(e){ FEES=null; }
   if(TAB==="dash") render();
   try{ TAXR=await api("/api/tax"); }catch(e){ TAXR=null; }
-  if(TAB==="dash"||TAB==="tax") render();
+  FUND = null;                       // Funding-Auswertung beim naechsten Anzeigen neu
+  if(TAB==="dash"||TAB==="tax"||TAB==="positions") render();
 }
 
 async function boot(){
@@ -2598,7 +2744,7 @@ window.pyReady = (async () => {
       pyodide.FS.syncfs(true, err => err ? rej(err) : res()));
 
     const files = ["ledger.py", "tax.py", "okx_import.py", "market.py",
-                    "webapi.py", "pdf_report.py", "checks.py", "schema.sql"];
+                    "webapi.py", "pdf_report.py", "checks.py", "statements.py", "schema.sql"];
     // Sichtbarer Fingerabdruck der geladenen Dateien (Groesse + einfache
     // Pruefsumme je Datei) - GitHub Pages liegt hinter einem CDN (Fastly),
     // das Antworten auch dann noch aus dem Edge-Cache liefern kann, wenn der

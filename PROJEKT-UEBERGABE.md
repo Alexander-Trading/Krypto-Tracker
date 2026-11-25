@@ -123,6 +123,9 @@ Playwright/Chromium muss installiert sein. Browser-Tests immer auch mit 360 px B
   parallel, Service Worker `sw.js` cached nur pyodide/ + pyodide-pkgs/ (bei neuer Pyodide-Version
   `CACHE` in sw.js hochzählen), Kursabrufe parallel (max. 6), fehlgeschlagene Kurse 24 h gemerkt
   (price_cache source='miss').
+- 25.11.: Funding-Kosten-Auswertung im Positionen-Tab (`/api/funding`, tax.funding_analysis);
+  Nachweise im Steuer-Tab: Bestand zum Stichtag und Herkunftsnachweis als PDF
+  (`/api/statement?kind=holdings|origin&date=…&format=pdf`, py/statements.py).
 - Offen: FIFO je Wallet, Sparerpauschbetrag einstellbar, echte EUR-Beträge statt Tageskurs,
   Datum nach deutscher Zeit statt UTC, OKX Earn/Staking, Verlustvortrag automatisch.
 
