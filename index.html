@@ -521,7 +521,7 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
         <rect x="29" y="29" width="6" height="16" rx="1" fill="var(--a23)"/>
         <rect x="37" y="22" width="6" height="23" rx="1" fill="var(--a23)"/>
       </svg>
-      <div><h1>Krypto-Tracker</h1><div class="hsub">OKX · <span id="pageName">Übersicht</span></div></div>
+      <div><h1>Krypto-Tracker</h1><div class="hsub"><span id="pageName">Übersicht</span></div></div>
     </div>
     <div class="hright">
       <div class="hmeta" id="meta"></div>
@@ -593,7 +593,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-25.6";
+const APP_BUILD="2026-11-25.7";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
