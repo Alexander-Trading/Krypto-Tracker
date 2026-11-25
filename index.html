@@ -583,7 +583,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-25.4";
+const APP_BUILD="2026-11-25.5";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
@@ -2325,7 +2325,7 @@ function statementsCard(){
     </div>
     <div class="note" style="padding:0 20px 16px"><b>Bestand:</b> Kryptowerte je Verwahrort zum Tagesende,
       Wert zum Tageskurs, Anschaffungskosten und offene Haltefristen – z. B. zum 31.12. für die eigenen Unterlagen.
-      <b>Herkunftsnachweis:</b> woher das Geld stammt (Einzahlungen, mitgebrachte Coins), was daraus geworden ist
+      <b>Herkunftsnachweis:</b> woher das Geld stammt (Einzahlungen, außerhalb von OKX gekaufte Coins auf der Trezor), was daraus geworden ist
       (Ergebnisse je Jahr) und was heute da ist, mit Abstimmung – etwa für die Bank.</div></div>`;
 }
 

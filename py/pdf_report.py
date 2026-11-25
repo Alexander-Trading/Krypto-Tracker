@@ -674,7 +674,7 @@ def build_origin_pdf(o, meta_text="") -> bytes:
     f.append(Paragraph("1. Zusammenfassung", styles["h2"]))
     f.append(Spacer(1, 4))
     lines = [("Eingezahlt in EUR (Bankkonto → OKX)", _money(o["sumIn"])),
-             ("Mitgebrachte Kryptowerte (Trezor, Einstandswert)", _money(o["sumWallet"])),
+             ("Außerhalb von OKX gekaufte Kryptowerte (auf Trezor übertragen, Kaufpreis)", _money(o["sumWallet"])),
              ("Ausgezahlt in EUR (OKX → Bankkonto)", _money(-L.D(o["sumOut"]))),
              ("Realisiertes Ergebnis (alle Jahre, siehe 4.)", _money(o["realized"])),
              ("Nicht realisiertes Ergebnis und Rundung", _money(o["unrealizedAndOther"])),
@@ -689,10 +689,11 @@ def build_origin_pdf(o, meta_text="") -> bytes:
             "Bericht mit Internetverbindung erneut erzeugen.", styles["warn"]))
         f.append(Spacer(1, 4))
     f.append(Paragraph(
-        "Abstimmung: Eingezahlt + mitgebrachte Kryptowerte − Ausgezahlt + realisiertes und "
+        "Abstimmung: Eingezahlt + außerhalb von OKX gekaufte Kryptowerte − Ausgezahlt + realisiertes und "
         "nicht realisiertes Ergebnis = heutiger Wert. Die Mittel stammen damit aus den "
         "unter 2. aufgeführten Einzahlungen von eigenem Bankkonto, den unter 3. "
-        "aufgeführten Kryptowerten sowie den Ergebnissen unter 4.", styles["note"]))
+        "aufgeführten, außerhalb von OKX gekauften Kryptowerten sowie den Ergebnissen "
+        "unter 4.", styles["note"]))
     f.append(Spacer(1, 12))
 
     # 2. Einzahlungen / Auszahlungen EUR
@@ -711,17 +712,25 @@ def build_origin_pdf(o, meta_text="") -> bytes:
     f.append(Spacer(1, 12))
 
     # 3. Kryptowerte von außen
-    f.append(Paragraph("3. Mitgebrachte und übertragene Kryptowerte", styles["h2"]))
+    f.append(Paragraph("3. Außerhalb von OKX gekaufte und übertragene Kryptowerte", styles["h2"]))
     f.append(Spacer(1, 4))
-    rows = [(_day(r["ts_utc"][:10]), "Trezor-Bestand (Kauf)", f"{_num(r['amount'])} {r['asset']}",
+    def _origin(r):
+        n = (r.get("note") or "").strip()
+        src = f"Kauf bei {n}" if n and n != "Wallet-Bestand" else "Kauf außerhalb von OKX"
+        return f"{src}, auf Trezor übertragen"
+    rows = [(_day(r["ts_utc"][:10]), _origin(r), f"{_num(r['amount'])} {r['asset']}",
              _money(r["eur_value"])) for r in o["walletLots"]]
     rows += [(_day(r["ts_utc"][:10]), "Einzahlung zu OKX", f"{_num(r['amount'])} {r['asset']}", "–")
              for r in o["cryptoIn"]]
     rows += [(_day(r["ts_utc"][:10]), "Auszahlung von OKX", f"{_num(r['amount'])} {r['asset']}", "–")
              for r in o["cryptoOut"]]
     if rows:
-        f.append(_grid(styles, ["Datum", "Vorgang", "Menge", "Einstandswert"], rows,
-                       [26, 50, 58, 36], num_cols=(2, 3)))
+        f.append(_grid(styles, ["Kaufdatum", "Vorgang", "Menge", "Kaufpreis"], rows,
+                       [24, 64, 46, 36], num_cols=(2, 3)))
+        f.append(Spacer(1, 3))
+        f.append(Paragraph("Kaufdatum und Kaufpreis der außerhalb von OKX erworbenen Kryptowerte "
+                           "laut eigener Aufstellung; die Kaufbelege der jeweiligen Börse können "
+                           "auf Anfrage vorgelegt werden.", styles["note"]))
     else:
         f.append(Paragraph("Keine Kryptowerte von außen eingebracht oder abgezogen.", styles["note"]))
     f.append(Spacer(1, 12))
