@@ -583,7 +583,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-25.3";
+const APP_BUILD="2026-11-25.4";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
@@ -2100,7 +2100,7 @@ function wireTax(){
     try{
       btn.textContent = "Lade PDF-Modul (einmalig)…";
       try{ await window.pyEnsurePdf(); }
-      catch(e){ throw new Error("PDF-Modul konnte nicht geladen werden – Internetverbindung prüfen. CSV geht immer."); }
+      catch(e){ throw new Error("PDF-Modul konnte nicht geladen werden (" + String(e && e.message || e).slice(0,160) + "). CSV geht immer."); }
       btn.textContent = "Erzeuge PDF…";
       const result = await api("/api/tax?format=pdf&year="+YEAR);
       const bytes = Uint8Array.from(atob(result.__pdf_base64__), c => c.charCodeAt(0));
@@ -2335,7 +2335,7 @@ function wireStatements(){
     try{
       btn.textContent = "Lade PDF-Modul…";
       try{ await window.pyEnsurePdf(); }
-      catch(e){ throw new Error("PDF-Modul konnte nicht geladen werden – Internetverbindung prüfen."); }
+      catch(e){ throw new Error("PDF-Modul konnte nicht geladen werden (" + String(e && e.message || e).slice(0,160) + ")."); }
       btn.textContent = "Erzeuge PDF…";
       const d = $("#stDate").value;
       const r = await api(`/api/statement?kind=${kind}&format=pdf${d?`&date=${d}`:""}`);
@@ -2735,15 +2735,20 @@ window.pyReady = (async () => {
     // geladen - frueher bei jedem Start, das waren mehrere MB Download und
     // auf dem iPhone die groesste Bremse beim Oeffnen der App.
     let pdfLibs = null;
+    // reportlab und charset-normalizer liegen als Wheels im Repo (pyodide-pkgs/),
+    // fest auf eine Version gepinnt: reportlab 5.1.1 (24.11.2026) verlangt
+    // Pillow >= 13, fuer Pyodide gibt es aber nur Pillow 12.2 - ein
+    // "micropip.install('reportlab')" holte die neueste Version und scheiterte.
+    // loadPackage installiert die Dateien direkt, ohne Abhaengigkeits-
+    // aufloesung, ohne PyPI und ohne CDN. Pillow ist die zur Pyodide-Version
+    // passende Datei aus dem offiziellen Release (Pruefsumme = pyodide-lock).
     window.pyEnsurePdf = () => pdfLibs || (pdfLibs = (async () => {
-      await pyodide.loadPackage("pyodide-pkgs/micropip.whl");
-      await pyodide.runPythonAsync(`
-import micropip
-await micropip.install(
-    "https://cdn.jsdelivr.net/pyodide/v${pyodide.version}/full/"
-    "pillow-12.2.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl")
-await micropip.install("reportlab")
-`);
+      await pyodide.loadPackage([
+        "pyodide-pkgs/pillow-12.2.0-cp314-cp314-pyemscripten_2026_0_wasm32.whl",
+        "pyodide-pkgs/charset_normalizer-3.5.3-py3-none-any.whl",
+        "pyodide-pkgs/reportlab-5.1.0-py3-none-any.whl",
+      ]);
+      await pyodide.runPythonAsync("import reportlab, PIL");
     })().catch(e => { pdfLibs = null; throw e; }));
 
     await pyodide.runPythonAsync(`

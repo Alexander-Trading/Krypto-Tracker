@@ -119,6 +119,10 @@ Playwright/Chromium muss installiert sein. Browser-Tests immer auch mit 360 px B
   mit source `auto_transfer`).
 - **Selbst-Update:** `const APP_BUILD` in index.html bei JEDER Änderung an index.html hochzählen,
   sonst laden Safari/Homescreen die neue Oberfläche nicht.
+- 25.11.: PDF-Fix: reportlab 5.1.1 (24.11.2026) verlangt Pillow >= 13, Pyodide hat nur 12.2 ->
+  micropip-Installation scheiterte. Jetzt liegen pillow-12.2.0 (aus dem Pyodide-Release 314.0.5,
+  sha256 = pyodide-lock), reportlab-5.1.0 und charset_normalizer-3.5.3 in pyodide-pkgs/ und werden
+  per pyodide.loadPackage geladen - kein PyPI/CDN mehr. Bei Pyodide-Update Wheels mit tauschen.
 - 25.11.: Verkaufs-Simulator aus dem Steuer-Tab entfernt (Nutzer braucht ihn nicht; Backend /api/simulate bleibt).
 - Ladezeit (22.11.): PDF-Bibliotheken erst beim ersten PDF-Export (`pyEnsurePdf`), py-Dateien
   parallel, Service Worker `sw.js` cached nur pyodide/ + pyodide-pkgs/ (bei neuer Pyodide-Version
