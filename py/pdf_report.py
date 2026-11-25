@@ -40,6 +40,8 @@ DIM = colors.HexColor("#6B7484")
 LINE = colors.HexColor("#E1E5EC")
 BG = colors.HexColor("#F6F7FA")
 DOWN = colors.HexColor("#C0392B")
+LOGO_BLUE = colors.HexColor("#4A6CF0")    # wie App (heller Modus) / icons/logo.svg
+LOGO_GREEN = colors.HexColor("#18B98A")
 
 
 def _money(v):
@@ -430,7 +432,40 @@ class _NumberedCanvas(Canvas):
             Canvas.showPage(self)
         Canvas.save(self)
 
+    def _draw_logo(self, x, y, size):
+        """App-Logo (Sechseck mit steigenden Balken) als Vektorgrafik.
+        x/y = linke untere Ecke, size = Kantenlaenge in Punkt. Koordinaten
+        wie in icons/logo.svg (64er-Raster, y nach unten)."""
+        k = size / 64.0
+        P = lambda px, py: (x + px * k, y + (64 - py) * k)
+        self.saveState()
+        self.setStrokeColor(LOGO_BLUE)
+        self.setLineWidth(4.5 * k)
+        self.setLineJoin(1)
+        path = self.beginPath()
+        pts = [(32, 8), (52, 20), (52, 44), (32, 56), (12, 44), (12, 20)]
+        path.moveTo(*P(*pts[0]))
+        for pt in pts[1:]:
+            path.lineTo(*P(*pt))
+        path.close()
+        self.drawPath(path, stroke=1, fill=0)
+        self.setFillColor(LOGO_GREEN)
+        for bx, top, h in ((21, 36, 9), (29, 29, 16), (37, 22, 23)):
+            x0, y0 = P(bx, top + h)
+            self.roundRect(x0, y0, 6 * k, h * k, 1 * k, stroke=0, fill=1)
+        self.restoreState()
+
+    def _draw_header(self):
+        w, h = A4
+        size = 7.5 * mm
+        x = w - 18 * mm - size
+        self._draw_logo(x, h - 9.5 * mm - size, size)
+        self.setFont("Helvetica-Bold", 8)
+        self.setFillColor(INK)
+        self.drawRightString(x - 2 * mm, h - 9.5 * mm - size / 2 - 1, "Krypto-Tracker")
+
     def _draw_footer(self, total):
+        self._draw_header()
         page = self._pageNumber
         w, _h = A4
         self.setFont("Helvetica", 7.5)
