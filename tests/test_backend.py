@@ -362,8 +362,13 @@ async def neue_funktionen():
     assert abs(D(usdc["cost"]) - D(1000) * D(1080) / D(1100)) < D("0.01"), usdc
     o = await ST.origin_report(c, until="2026-02-05")
     assert D(o["sumIn"]) == D(1000) and len(o["eurIn"]) == 1
+    # Trezor-Bestand erscheint nur als mitgebrachter Bestand, nicht als OKX-Einzahlung
+    IMP.import_wallet_lots(c, "Datum,Asset,Menge,EUR-Kosten\n2025-02-13,BTC,0.1,9000\n", "t.csv")
+    o = await ST.origin_report(c, until="2026-02-05")
+    assert len(o["walletLots"]) == 1 and o["cryptoIn"] == [], (o["walletLots"], o["cryptoIn"])
+    assert D(o["sumWallet"]) == D(9000)
     # Abstimmung: Wert = Einzahlung + realisiert + nicht realisiert
-    assert abs(D(o["valueNow"]) - (D(o["sumIn"]) + D(o["resultTotal"]))) < D("0.000001")
+    assert abs(D(o["valueNow"]) - (D(o["sumIn"]) + D(o["sumWallet"]) + D(o["resultTotal"]))) < D("0.000001")
     print("Neue Funktionen OK")
 
 

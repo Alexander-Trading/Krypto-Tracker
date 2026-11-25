@@ -100,10 +100,17 @@ async def origin_report(conn, fetcher=None, until=None):
                 WHERE {kind_sql} AND t.ts_utc <= ?
                 ORDER BY t.ts_utc""", (*args, until + "T23:59:59Z"))]
 
-    eur_in = flows("t.tx_type = 'deposit' AND e.asset = 'EUR' AND CAST(e.amount AS REAL) > 0")
+    eur_in = flows("t.tx_type = 'deposit' AND e.asset = 'EUR' AND CAST(e.amount AS REAL) > 0 "
+                   "AND t.source != 'wallet_csv'")
     eur_out = flows("t.tx_type = 'withdrawal' AND e.asset = 'EUR' AND CAST(e.amount AS REAL) < 0")
-    crypto_in = flows("t.tx_type = 'deposit' AND e.asset != 'EUR' AND CAST(e.amount AS REAL) > 0")
-    crypto_out = flows("t.tx_type = 'withdrawal' AND e.asset != 'EUR' AND CAST(e.amount AS REAL) < 0")
+    # Nur echte Ein-/Auszahlungen von Coins bei OKX. Die Zeilen der Trezor-
+    # Bestands-CSV sind intern ebenfalls "deposit" (Konto wallet) - die stehen
+    # schon als "Trezor-Bestand (Kauf)" und duerfen hier nicht nochmal auftauchen.
+    okx = "t.account IN ('funding', 'trading', 'earn') AND t.source != 'wallet_csv'"
+    crypto_in = flows(f"t.tx_type = 'deposit' AND {okx} AND e.asset != 'EUR' "
+                      "AND CAST(e.amount AS REAL) > 0")
+    crypto_out = flows(f"t.tx_type = 'withdrawal' AND {okx} AND e.asset != 'EUR' "
+                       "AND CAST(e.amount AS REAL) < 0")
     wallet_lots = flows("t.source = 'wallet_csv' AND CAST(e.amount AS REAL) > 0")
 
     rep = await TAX.build_report(conn, fetcher=fetcher)
