@@ -88,6 +88,26 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .td-row .td-v.pos{color:var(--up)} .td-row .td-v.neg{color:var(--down)}
 .td-row.free{opacity:.6}
 .td-more{display:block;margin:12px auto 0}
+.doc-date{display:flex;align-items:center;justify-content:space-between;gap:12px;
+  padding:14px 20px;border-bottom:1px solid var(--line)}
+.doc-date span{font-size:13.5px;font-weight:500}
+.doc-date input{height:40px;box-sizing:border-box;padding:0 12px;border-radius:10px;
+  border:1px solid var(--line-2);background:var(--panel-2);color:var(--fg);
+  font-family:var(--mono);font-size:16px;min-width:0;max-width:60%}
+.doc-list{display:grid;gap:10px;padding:14px 20px 18px}
+.doc-btn{display:grid;grid-template-columns:36px minmax(0,1fr) 20px;align-items:center;gap:12px;
+  width:100%;text-align:left;padding:14px;border-radius:12px;cursor:pointer;
+  border:1px solid var(--line-2);background:var(--panel-2);color:var(--fg);font-family:var(--sans);
+  transition:border-color .15s,background .15s}
+.doc-btn:hover{border-color:var(--a20)}
+.doc-btn:active{transform:scale(.99)}
+.doc-btn:disabled{opacity:.6;cursor:progress}
+.doc-btn > svg:first-child{width:36px;height:36px;padding:7px;box-sizing:border-box;border-radius:10px;
+  color:var(--a20);background:color-mix(in srgb, var(--a20) 14%, transparent)}
+.doc-t{display:flex;flex-direction:column;gap:3px;min-width:0}
+.doc-t b{font-size:14.5px;font-weight:600}
+.doc-t small{font-size:12px;color:var(--dim);line-height:1.4}
+.doc-dl{width:20px;height:20px;color:var(--faint)}
 .fund-months{padding:4px 20px 8px}
 .fund-m{display:grid;grid-template-columns:44px 1fr auto;gap:10px;align-items:center;
   font-family:var(--mono);font-size:11.5px;padding:3px 0}
@@ -192,15 +212,21 @@ button{-webkit-tap-highlight-color:transparent}
   font-weight:700;line-height:16px;text-align:center;font-family:var(--mono)}
 
 /* Verlustvortrag */
-.carryrow{display:flex;gap:10px;align-items:center;padding:12px 20px;
-  border-top:1px solid var(--line);flex-wrap:wrap}
+.carryrow{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px 10px;align-items:center;
+  padding:14px 20px;border-top:1px solid var(--line)}
 .carryrow:first-child{border-top:none}
-.carryrow label{flex:1 1 160px;font-size:13px}
-.carryrow input{width:120px;background:var(--panel-2);border:1px solid var(--line);
-  color:var(--fg);border-radius:8px;padding:7px 10px;font-family:var(--mono);font-size:13px}
-.carryrow button{background:var(--raise);border:1px solid var(--line-2);color:var(--fg);
-  border-radius:8px;padding:7px 12px;font-size:12px;cursor:pointer}
-.carrysaved{font-size:11px;color:var(--up);margin-left:4px}
+.carryrow label{grid-column:1/-1;font-size:13.5px;font-weight:500}
+.carryrow input{width:100%;box-sizing:border-box;height:40px;background:var(--panel-2);
+  border:1px solid var(--line-2);color:var(--fg);border-radius:10px;padding:0 12px;
+  font-family:var(--mono);font-size:16px;text-align:right}
+.carryrow input:focus{outline:none;border-color:var(--a20)}
+.carryrow button{height:40px;padding:0 16px;border-radius:10px;cursor:pointer;
+  background:transparent;border:1px solid var(--a20);color:var(--a20);
+  font-family:var(--sans);font-size:13.5px;font-weight:500}
+.carryrow button:active{transform:scale(.98)}
+.carrysaved{grid-column:1/-1;font-size:11.5px;color:var(--up)}
+.carry-in{display:flex;align-items:center;gap:8px}
+.carry-in span{font-family:var(--mono);font-size:13px;color:var(--faint)}
 .pad{padding:18px 20px}
 .ch{display:flex;justify-content:space-between;align-items:center;gap:14px;
   padding:14px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
@@ -593,7 +619,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-25.7";
+const APP_BUILD="2026-11-25.8";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
@@ -1572,9 +1598,10 @@ function taxPanel(){
 
   const carryRow = (bucket, label, val) => `<div class="carryrow" data-bucket="${bucket}">
     <label>${label}</label>
-    <input type="text" class="carry-input" value="${val>0?nf(val):""}" placeholder="0,00">
-    <button class="carry-save">Übernehmen</button>
-    <span class="carrysaved hidden">gespeichert</span>
+    <div class="carry-in"><input type="text" inputmode="decimal" class="carry-input"
+      value="${val>0?nf(val):""}" placeholder="0,00" aria-label="${label} in Euro"><span>€</span></div>
+    <button class="carry-save">Speichern</button>
+    <span class="carrysaved hidden">✓ gespeichert</span>
   </div>`;
   const carryCard = `<div class="sect">Verlustvortrag ${YEAR}</div>
     <div class="card">
@@ -2136,7 +2163,7 @@ function wireTax(){
     const btn = row.querySelector(".carry-save");
     const saved = row.querySelector(".carrysaved");
     btn.onclick = async () => {
-      const raw = input.value.trim().replace(",", ".");
+      const raw = numIn(input.value);            // "1.234,56" und "1234.56"
       const amount = raw === "" ? 0 : Number(raw);
       if(Number.isNaN(amount) || amount < 0){ alert("Bitte eine positive Zahl eintragen."); return; }
       btn.disabled = true;
@@ -2327,33 +2354,40 @@ async function handleLotsFile(f){
 function statementsCard(){
   const today = new Date().toISOString().slice(0,10);
   const def = `${YEAR}-12-31` > today ? today : `${YEAR}-12-31`;
+  const ico = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/></svg>`;
+  const dl = `<svg class="doc-dl" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"
+    stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>`;
   return `<div class="sect">Nachweise</div>
-    <div class="card"><div class="sim-f">
-      <label>Stichtag<input class="mini" id="stDate" type="date" value="${def}" max="${today}"></label>
-      <button class="act" id="stHold">Bestand zum Stichtag (PDF)</button>
-      <button class="act" id="stOrigin">Herkunftsnachweis (PDF)</button>
-    </div>
-    <div class="note" style="padding:0 20px 16px"><b>Bestand:</b> Kryptowerte je Verwahrort zum Tagesende,
-      Wert zum Tageskurs, Anschaffungskosten und offene Haltefristen – z. B. zum 31.12. für die eigenen Unterlagen.
-      <b>Herkunftsnachweis:</b> woher das Geld stammt (Einzahlungen, außerhalb von OKX gekaufte Coins auf der Trezor), was daraus geworden ist
-      (Ergebnisse je Jahr) und was heute da ist, mit Abstimmung – etwa für die Bank.</div></div>`;
+    <div class="card">
+      <label class="doc-date"><span>Stichtag</span>
+        <input id="stDate" type="date" value="${def}" max="${today}"></label>
+      <div class="doc-list">
+        <button class="doc-btn" id="stHold">${ico}<span class="doc-t"><b>Bestand zum Stichtag</b>
+          <small>Bestände, Werte und Haltefristen – z. B. zum 31.12.</small></span>${dl}</button>
+        <button class="doc-btn" id="stOrigin">${ico}<span class="doc-t"><b>Herkunftsnachweis</b>
+          <small>Woher das Geld stammt – z. B. für die Bank</small></span>${dl}</button>
+      </div>
+    </div>`;
 }
 
 function wireStatements(){
   const run = async (btn, kind) => {
-    const old = btn.textContent; btn.disabled = true;
+    const small = btn.querySelector("small"), old = small.textContent;
+    const say = t => { small.textContent = t; };
+    btn.disabled = true;
     try{
-      btn.textContent = "Lade PDF-Modul…";
+      say("Lade PDF-Modul…");
       try{ await window.pyEnsurePdf(); }
       catch(e){ throw new Error("PDF-Modul konnte nicht geladen werden (" + String(e && e.message || e).slice(0,160) + ")."); }
-      btn.textContent = "Erzeuge PDF…";
+      say("Erzeuge PDF…");
       const d = $("#stDate").value;
       const r = await api(`/api/statement?kind=${kind}&format=pdf${d?`&date=${d}`:""}`);
       if(r.__error__) throw new Error(r.__error__);
       const bytes = Uint8Array.from(atob(r.__pdf_base64__), c => c.charCodeAt(0));
       downloadBlob(bytes, "application/pdf", r.__filename__);
     }catch(e){ alert("PDF konnte nicht erzeugt werden: " + (e.message||e)); }
-    finally{ btn.disabled = false; btn.textContent = old; }
+    finally{ btn.disabled = false; say(old); }
   };
   const h = $("#stHold"), o = $("#stOrigin");
   if(h) h.onclick = ()=>run(h, "holdings");
