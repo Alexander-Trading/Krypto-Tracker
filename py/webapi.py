@@ -394,7 +394,8 @@ async def _route_post(path, body, conn):
     if path == "/api/losscarry":
         TAX.set_loss_carryforward(
             conn, int(body["year"]), body["bucket"],
-            L.D(body.get("amount") or 0), body.get("note") or "")
+            None if body.get("amount") in (None, "") else L.D(body["amount"]),
+            body.get("note") or "")
         return {"items": [dict(r) for r in conn.execute(
             "SELECT year, bucket, amount_eur, note FROM loss_carryforward "
             "ORDER BY year DESC, bucket")]}

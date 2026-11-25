@@ -124,6 +124,7 @@ async def main():
     # --- Steuerkorrekturen 21.11.2026 -----------------------------------
     await steuer_korrekturen()
     await neue_funktionen()
+    await paket_1_bis_6()
     print("ALLE TESTS OK")
 
 
@@ -370,6 +371,100 @@ async def neue_funktionen():
     # Abstimmung: Wert = Einzahlung + realisiert + nicht realisiert
     assert abs(D(o["valueNow"]) - (D(o["sumIn"]) + D(o["sumWallet"]) + D(o["resultTotal"]))) < D("0.000001")
     print("Neue Funktionen OK")
+
+
+
+async def paket_1_bis_6():
+    D = Decimal
+
+    # 3) Deutsche Zeit: 23:30 UTC am 31.12. ist schon der 1.1. (MEZ),
+    #    22:30 UTC am 30.6. ist der 1.7. (MESZ).
+    assert TAX.de_day("2025-12-31T23:30:00Z") == "2026-01-01"
+    assert TAX.de_day("2025-06-30T22:30:00Z") == "2025-07-01"
+    assert TAX.de_day("2025-06-30T21:30:00Z") == "2025-06-30"
+    assert TAX.de_day("2025-03-30T00:30:00Z") == "2025-03-30"   # vor Umstellung 01:00 UTC
+    assert TAX.year_of("2025-12-31T23:30:00Z") == 2026
+    c = fresh()
+    _tx(c, "2024-03-10T23:30:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("EUR", "-1000"), L.Entry("BTC", "0.02")], "b")
+    # Verkauf 10.03.2025 23:30 UTC = 11.03.2025 deutsch -> Anschaffung 11.03.2024
+    # deutsch, Frist endet 11.03.2025 -> steuerpflichtig (frueher: UTC-Tage 10.03.)
+    _tx(c, "2025-03-10T23:30:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("BTC", "-0.02"), L.Entry("EUR", "1500")], "s")
+    d, o, w, n = TAX.build_lots(c, {})
+    assert d[0]["acquired"] == "2024-03-11" and d[0]["sold"] == "2025-03-11", d
+    assert d[0]["taxable"] is True
+
+    # 2) Echter EUR-Betrag statt Tageskurs
+    assert d[0]["cost_eur"] == D(1000) and d[0]["proceeds_eur"] == D(1500), d
+    assert d[0]["gain_eur"] == D(500) and d[0]["actualEur"] is True
+    # zwei Kaeufe am selben Tag zu verschiedenen Kursen: jeder mit seinem Betrag
+    c = fresh()
+    _tx(c, "2025-05-01T08:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("EUR", "-1000"), L.Entry("BTC", "0.01")], "b1")
+    _tx(c, "2025-05-01T18:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("EUR", "-1200"), L.Entry("BTC", "0.01")], "b2")
+    _, o, _, _ = TAX.build_lots(c, {("BTC", "2025-05-01"): D(110000)})
+    assert sorted(l["cost_eur"] for l in o) == [D(1000), D(1200)], o
+
+    # 1) FIFO je Wallet: Verkauf auf OKX verbraucht nicht den aelteren Trezor-Bestand
+    c = fresh()
+    IMP.import_wallet_lots(c, "Datum,Asset,Menge,EUR-Kosten\n2020-01-01,BTC,1,7000\n", "t.csv")
+    _tx(c, "2025-01-10T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("EUR", "-1000"), L.Entry("BTC", "0.02")], "buy")
+    _tx(c, "2025-02-10T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("BTC", "-0.01"), L.Entry("EUR", "600")], "sell")
+    d, o, w, n = TAX.build_lots(c, {})
+    assert len(d) == 1 and d[0]["wallet"] == "OKX" and d[0]["acquired"] == "2025-01-10", d
+    assert d[0]["taxable"] is True and d[0]["gain_eur"] == D(100), d
+    trez = [l for l in o if l["wallet"] == "Trezor"]
+    assert len(trez) == 1 and trez[0]["qty"] == D(1), o
+    # Umbuchung Trezor -> OKX (Modus carry): Lot wandert mit Kaufdatum 2020,
+    # wird in OKX chronologisch vorne einsortiert und danach zuerst verkauft.
+    _tx(c, "2025-03-01T10:00:00Z", "deposit", "funding", "neutral",
+        [L.Entry("BTC", "0.5")], "dep")
+    dep = c.execute("SELECT id FROM transactions WHERE external_id='dep'").fetchone()[0]
+    CHK.set_flow_mode(c, dep, "carry")
+    _tx(c, "2025-04-01T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("BTC", "-0.5"), L.Entry("EUR", "40000")], "sell2")
+    d, o, w, n = TAX.build_lots(c, {})
+    s2 = [x for x in d if x["sold"] == "2025-04-01"]
+    assert len(s2) == 1 and s2[0]["acquired"] == "2020-01-01" and s2[0]["taxable"] is False, s2
+    assert s2[0]["cost_eur"] == D(3500), s2
+    by_w = {}
+    for l in o:
+        by_w[l["wallet"]] = by_w.get(l["wallet"], D(0)) + l["qty"]
+    assert by_w == {"Trezor": D("0.5"), "OKX": D("0.01")}, by_w
+    assert not w, w
+
+    # 4) Verlustvortrag automatisch: 2025 Verlust 300 -> 2026 Vortrag 300
+    c = fresh()
+    _tx(c, "2025-01-10T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("EUR", "-1000"), L.Entry("BTC", "0.02")], "b")
+    _tx(c, "2025-02-10T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("BTC", "-0.01"), L.Entry("EUR", "200")], "s1")
+    _tx(c, "2026-01-05T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("EUR", "-1000"), L.Entry("ETH", "1")], "b2")
+    _tx(c, "2026-02-05T10:00:00Z", "trade_spot", "trading", "par23",
+        [L.Entry("ETH", "-1"), L.Entry("EUR", "2500")], "s2")
+    async def nofx(a, d):
+        return None
+    rep = await TAX.build_report(c, nofx)
+    y25 = next(y for y in rep["years"] if y["year"] == 2025)
+    y26 = next(y for y in rep["years"] if y["year"] == 2026)
+    assert D(y25["par23"]["gain"]) == D(-300) and D(y25["par23"]["carryOut"]) == D(300), y25["par23"]
+    assert D(y26["par23"]["lossCarryIn"]) == D(300) and y26["par23"]["carrySource"] == "auto"
+    assert D(y26["par23"]["taxable"]) == D(1200), y26["par23"]
+    # manueller Wert (laut Bescheid) ersetzt den automatischen, leer = wieder automatisch
+    TAX.set_loss_carryforward(c, 2026, "par23", D(100))
+    rep = await TAX.build_report(c, nofx)
+    y26 = next(y for y in rep["years"] if y["year"] == 2026)
+    assert D(y26["par23"]["lossCarryIn"]) == D(100) and y26["par23"]["carrySource"] == "manual"
+    TAX.set_loss_carryforward(c, 2026, "par23", None)
+    rep = await TAX.build_report(c, nofx)
+    y26 = next(y for y in rep["years"] if y["year"] == 2026)
+    assert D(y26["par23"]["lossCarryIn"]) == D(300)
+    print("Paket 1-6 OK")
 
 
 asyncio.run(main())

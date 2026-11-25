@@ -102,8 +102,42 @@ def result_after_carry(raw, carry_in):
     return max(raw - carry_in, Decimal(0))
 
 
+def _last_sunday(year, month):
+    from datetime import date
+    d = date(year, month, 31)          # Maerz und Oktober haben 31 Tage
+    return d - timedelta(days=(d.weekday() + 1) % 7)
+
+
+def to_berlin(ts):
+    """UTC-Zeitstempel -> datetime in deutscher Zeit (MEZ/MESZ). Bewusst ohne
+    zoneinfo, weil Pyodide keine Zeitzonen-Datenbank mitbringt. Regel seit
+    1996: Sommerzeit vom letzten Sonntag im Maerz bis zum letzten Sonntag im
+    Oktober, Umstellung jeweils um 01:00 UTC."""
+    t = ts.strip().replace("Z", "+00:00")
+    if len(t) == 10:
+        t += "T00:00:00+00:00"
+    dt = datetime.fromisoformat(t)
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    dt = dt.astimezone(timezone.utc)
+    y = dt.year
+    start = datetime.combine(_last_sunday(y, 3), datetime.min.time(),
+                             tzinfo=timezone.utc) + timedelta(hours=1)
+    end = datetime.combine(_last_sunday(y, 10), datetime.min.time(),
+                           tzinfo=timezone.utc) + timedelta(hours=1)
+    return dt + timedelta(hours=2 if start <= dt < end else 1)
+
+
+def de_day(ts):
+    """Kalendertag in deutscher Zeit - massgeblich fuer Haltefrist und
+    Steuerjahr. (Kurse werden weiter je UTC-Tag nachgeschlagen, weil die
+    OKX-Tageskerzen nach UTC geschnitten sind.)"""
+    return to_berlin(ts).date().isoformat()
+
+
 def year_of(ts):
-    return int(ts[:4])
+    """Steuerjahr nach deutscher Zeit: 31.12. 23:30 UTC ist schon der 1.1."""
+    return int(de_day(ts)[:4])
 
 
 def day_of(ts):
@@ -328,19 +362,80 @@ def to_eur(table, asset, day, amount):
 
 # --- FIFO ------------------------------------------------------------------
 
+WALLET_NAME = {"wallet": "Trezor"}
+
+
+def wallet_of(account):
+    """Wallet im Sinne der Verbrauchsfolge (BMF 6.3.2025, Rz. 61): alle
+    OKX-Unterkonten (Funding/Trading/Earn) zusammen sind EINE Wallet - es ist
+    ein Kundenkonto bei einer Boerse -, die Trezor ist die zweite."""
+    return WALLET_NAME.get(account or "", "OKX")
+
+
+def _wallet_transfers(conn):
+    """Umbuchungen zwischen den Wallets (Pruefen-Tab, Modus 'carry'): Original
+    auf dem OKX-Konto plus automatische Gegenbuchung auf der Trezor. Liefert
+    {tx_id: partner_id} in beide Richtungen."""
+    pairs = {}
+    for r in conn.execute(
+            "SELECT id, external_id FROM transactions WHERE source = 'auto_transfer' "
+            "AND external_id LIKE 'mirror-%'"):
+        try:
+            orig = int(r["external_id"][7:])
+        except ValueError:
+            continue
+        pairs[orig] = r["id"]
+        pairs[r["id"]] = orig
+    return pairs
+
+
+def _insert_lot(q, lot):
+    """Uebertragenes Lot nach Anschaffungszeitpunkt einsortieren - die
+    Kaufdaten wandern mit, FIFO in der Ziel-Wallet bleibt chronologisch."""
+    for i, other in enumerate(q):
+        if (other["ts"] or "") > (lot["ts"] or ""):
+            q.insert(i, lot)
+            return
+    q.append(lot)
+
+
+def _trade_eur(t, entries):
+    """Tausch gegen EUR: der tatsaechlich gezahlte bzw. erhaltene EUR-Betrag
+    ist Anschaffungskosten bzw. Veraeusserungspreis - kein Tageskurs. Liefert
+    {asset: eur_betrag} fuer die Krypto-Seite oder {}."""
+    if t["tx_type"] != "trade_spot":
+        return {}
+    prin = [e for e in entries if e["kind"] == "principal" and L.D(e["amount"]) != 0]
+    eur = [e for e in prin if e["asset"] == BASE]
+    other = [e for e in prin if e["asset"] != BASE]
+    if len(eur) != 1 or len(other) != 1:
+        return {}
+    a_eur, a_oth = L.D(eur[0]["amount"]), L.D(other[0]["amount"])
+    if (a_eur < 0) == (a_oth < 0):          # beides Ab- oder Zugang: kein Tausch
+        return {}
+    return {other[0]["asset"]: abs(a_eur)}
+
+
 def build_lots(conn, table, until=None):
     """Laeuft chronologisch durch alle Zugaenge und Abgaenge und fuehrt je
-    Asset eine FIFO-Schlange. Gibt Veraeusserungen und offene Lots zurueck.
+    Wallet und Asset eine FIFO-Schlange. Gibt Veraeusserungen und offene Lots
+    zurueck.
 
     Wichtig: das umfasst ALLE Buchungen, nicht nur die mit tax_bucket
     'par23'/'par22'/'neutral'. Nach BMF-Schreiben vom 6.3.2025 gilt jede
     Verwendung von Kryptowerten als Zahlungsmittel - auch fuer Trading-
     Gebuehren oder Funding-Zahlungen bei Futures (§20-Buchungen) - selbst
     als privates Veraeusserungsgeschaeft nach §23 EStG, zusaetzlich zum
-    eigentlichen §20-Ergebnis der Position. Fruehere Version hat §20-
-    Buchungen hier komplett ausgeklammert und dadurch USDC-Ausgaben fuer
-    Gebuehren/Funding gar nicht als Veraeusserung erfasst."""
-    lots = {}          # asset -> deque von {menge, kosten_eur, datum}
+    eigentlichen §20-Ergebnis der Position.
+
+    Verbrauchsfolge je Wallet (BMF 6.3.2025, Rz. 61): OKX und Trezor haben
+    getrennte Schlangen. Eine Umbuchung zwischen ihnen nimmt die Lots (FIFO)
+    aus der Quell-Wallet und legt sie mit Kaufdatum und Kosten in der
+    Ziel-Wallet ab. Frueher lief FIFO ueber alle Konten gemeinsam.
+
+    Datum fuer Haltefrist und Steuerjahr: deutsche Zeit (de_day). Kurse:
+    weiterhin je UTC-Tag."""
+    lots = {}          # (wallet, asset) -> deque von Lots
     disposals = []
     warnings = []
 
@@ -351,31 +446,86 @@ def build_lots(conn, table, until=None):
            FROM transactions t WHERE t.ts_utc <= ?
            ORDER BY t.ts_utc, t.id""",
         ((until + "T23:59:59Z") if until else "9999",)).fetchall()
+    by_id = {t["id"]: t for t in rows}
+    xfer = _wallet_transfers(conn)
+    done = set()
 
     transferred_out = []   # Auszahlungen auf eigene Wallets (keine Veraeusserung)
 
+    def ents(tx_id):
+        return conn.execute(
+            "SELECT asset, amount, kind, eur_value FROM entries WHERE transaction_id = ?",
+            (tx_id,)).fetchall()
+
     for t in rows:
-        # Umbuchung zwischen eigenen Konten (Funding <-> Trading usw.): kein
-        # Steuerereignis. Die Coins bleiben dieselben, die Haltefrist laeuft
-        # weiter. Beide Seiten werden uebersprungen - frueher wurde die
-        # Abbuchung als Verkauf und die Gutschrift als Neukauf zum Tageskurs
-        # gerechnet (fiktiver Gewinn, Haltefrist neu gestartet). Da FIFO hier
-        # ueber alle Konten gemeinsam laeuft, aendert eine Umbuchung nichts
-        # an der Reihenfolge der Lots.
+        if t["id"] in done:
+            continue
+        wallet = wallet_of(t["account"])
+
         if t["tx_type"] == "transfer":
+            partner = by_id.get(xfer.get(t["id"]))
+            # Umbuchung innerhalb einer Wallet (OKX Funding <-> Trading):
+            # kein Steuerereignis, die Schlange bleibt unveraendert.
+            if partner is None or wallet_of(partner["account"]) == wallet:
+                continue
+            done.add(partner["id"])
+            day = day_of(t["ts_utc"])
+            lday = de_day(t["ts_utc"])
+            moves = {}
+            for side in (t, partner):
+                for e in ents(side["id"]):
+                    amt = L.D(e["amount"])
+                    if e["asset"] == BASE or amt == 0 or e["kind"] != "principal":
+                        continue
+                    m = moves.setdefault(e["asset"], {"qty": Decimal(0)})
+                    if amt < 0:
+                        m["from"] = wallet_of(side["account"])
+                        m["qty"] = -amt
+                    else:
+                        m["to"] = wallet_of(side["account"])
+            for asset, m in moves.items():
+                src, dst = m.get("from"), m.get("to")
+                if not src or not dst:
+                    continue
+                q = lots.setdefault((src, asset), deque())
+                tq = lots.setdefault((dst, asset), deque())
+                need = m["qty"]
+                while need > 0 and q:
+                    lot = q[0]
+                    take = min(need, lot["qty"])
+                    if take == lot["qty"]:
+                        moved = q.popleft()
+                    else:
+                        share = take / lot["qty"]
+                        part = (lot["cost_eur"] * share) if lot["cost_eur"] is not None else None
+                        moved = dict(lot, qty=take, cost_eur=part)
+                        lot["qty"] -= take
+                        if part is not None:
+                            lot["cost_eur"] -= part
+                    moved = dict(moved, account=("wallet" if dst == "Trezor" else "funding"),
+                                 wallet=dst)
+                    _insert_lot(tq, moved)
+                    need -= take
+                if need > 0:
+                    eur = to_eur(table, asset, day, need)
+                    warnings.append(
+                        f"Umbuchung {src} → {dst} am {day_de(lday)}: {need} {asset} ohne "
+                        f"Bestand in {src} – mit Tageskurs als Zugang in {dst} erfasst.")
+                    _insert_lot(tq, {"qty": need, "cost_eur": eur, "day": lday,
+                                     "ts": t["ts_utc"], "note": t["note"],
+                                     "account": "wallet" if dst == "Trezor" else "funding",
+                                     "wallet": dst})
             continue
 
-        entries = conn.execute(
-            "SELECT asset, amount, kind, eur_value FROM entries WHERE transaction_id = ?",
-            (t["id"],)).fetchall()
-        day = day_of(t["ts_utc"])
+        entries = ents(t["id"])
+        day = day_of(t["ts_utc"])        # Kurs-Tag (UTC)
+        lday = de_day(t["ts_utc"])       # Rechtstag (deutsche Zeit)
+        actual = _trade_eur(t, entries)
 
         # Gebuehren eines Tauschs (§ 23): Anschaffungsnebenkosten beim Kauf,
         # Veraeusserungskosten beim Verkauf (BMF 6.3.2025, Rz. 57 ff.).
-        # Frueher wurden EUR-Gebuehren komplett ignoriert und Coin-Gebuehren
-        # nur als Mini-Veraeusserung gebucht, ohne den Gewinn zu mindern.
         # Eine in Krypto gezahlte Gebuehr bleibt zusaetzlich selbst eine
-        # Veraeusserung der Gebuehren-Coins (unten, wie bisher).
+        # Veraeusserung der Gebuehren-Coins (unten).
         fee_eur = Decimal(0)
         principal_out = [e for e in entries if e["kind"] == "principal"
                          and e["asset"] != BASE and L.D(e["amount"]) < 0]
@@ -411,6 +561,8 @@ def build_lots(conn, table, until=None):
             # Betrag, keine Schaetzung ueber einen Tageskurs.
             if amt > 0 and e["eur_value"] not in (None, ""):
                 eur = L.D(e["eur_value"])
+            elif e["kind"] == "principal" and asset in actual:
+                eur = actual[asset]
             else:
                 eur = to_eur(table, asset, day, abs(amt))
 
@@ -422,14 +574,14 @@ def build_lots(conn, table, until=None):
                         "ohne Kostenbasis erfasst.")
                 elif fee_on_buy and e["kind"] == "principal":
                     eur += fee_on_buy / len(principal_in)
-                lots.setdefault(asset, deque()).append({
-                    "qty": amt, "cost_eur": eur, "day": day,
+                lots.setdefault((wallet, asset), deque()).append({
+                    "qty": amt, "cost_eur": eur, "day": lday,
                     "ts": t["ts_utc"], "note": t["note"],
-                    "account": t["account"]})
+                    "account": t["account"], "wallet": wallet})
             else:
-                # Abgang: Lots in FIFO-Reihenfolge verbrauchen
+                # Abgang: Lots der eigenen Wallet in FIFO-Reihenfolge verbrauchen
                 need = -amt
-                q = lots.setdefault(asset, deque())
+                q = lots.setdefault((wallet, asset), deque())
                 if (eur is not None and fee_on_sale
                         and e["kind"] == "principal"):
                     eur -= fee_on_sale / len(principal_out)
@@ -439,27 +591,28 @@ def build_lots(conn, table, until=None):
                     share = (take / lot["qty"]) if lot["qty"] else Decimal(0)
                     cost = (lot["cost_eur"] * share) if lot["cost_eur"] is not None else None
                     proceeds = (eur * (take / -amt)) if eur is not None else None
-                    held = (datetime.fromisoformat(day)
+                    held = (datetime.fromisoformat(lday)
                             - datetime.fromisoformat(lot["day"])).days
 
                     if is_withdrawal:
                         transferred_out.append({
                             "asset": asset, "qty": take,
-                            "acquired": lot["day"], "date": day})
+                            "acquired": lot["day"], "date": lday})
                     else:
                         disposals.append({
-                            "asset": asset, "qty": take,
-                            "acquired": lot["day"], "sold": day,
+                            "asset": asset, "qty": take, "wallet": wallet,
+                            "acquired": lot["day"], "sold": lday,
                             "held_days": held,
-                            "taxable": innerhalb_haltefrist(lot["day"], day),
+                            "taxable": innerhalb_haltefrist(lot["day"], lday),
                             "cost_eur": cost, "proceeds_eur": proceeds,
                             "gain_eur": (proceeds - cost)
                                 if (proceeds is not None and cost is not None) else None,
-                            "year": year_of(t["ts_utc"]),
+                            "year": int(lday[:4]),
                             "note": t["note"],
                             # Anlass der Veraeusserung (fuer Report/PDF):
                             # Tausch, Gebuehr oder Funding in Krypto bezahlt
                             "txType": t["tx_type"], "kind": e["kind"],
+                            "actualEur": e["kind"] == "principal" and asset in actual,
                         })
 
                     lot["qty"] -= take
@@ -470,9 +623,14 @@ def build_lots(conn, table, until=None):
                         q.popleft()
 
                 if need > 0 and not is_withdrawal:
+                    other = sum((l["qty"] for (w, a), qq in lots.items()
+                                 if a == asset and w != wallet for l in qq), Decimal(0))
                     warnings.append(
-                        f"Abgang von {need} {asset} am {day} ohne passenden "
-                        "Zugang. Es fehlen ältere Daten.")
+                        f"Abgang von {need} {asset} am {day_de(lday)} in {wallet} ohne "
+                        "passenden Zugang. "
+                        + (f"In der anderen Wallet liegen {other} {asset} – fehlt eine "
+                           "Umbuchung (Prüfen → Ein- und Auszahlungen)?" if other > 0
+                           else "Es fehlen ältere Daten."))
 
     notes = []
     if transferred_out:
@@ -485,8 +643,8 @@ def build_lots(conn, table, until=None):
 
     open_lots = []
     today = (datetime.fromisoformat(until).date() if until
-             else datetime.now(timezone.utc).date())
-    for asset, q in lots.items():
+             else to_berlin(L.now_utc()).date())
+    for (wallet, asset), q in lots.items():
         for lot in q:
             if lot["qty"] <= 0:
                 continue
@@ -494,7 +652,7 @@ def build_lots(conn, table, until=None):
             free_on = haltefrist_ende(acquired) + timedelta(days=1)
             open_lots.append({
                 "asset": asset, "qty": lot["qty"], "acquired": lot["day"],
-                "cost_eur": lot["cost_eur"],
+                "cost_eur": lot["cost_eur"], "wallet": wallet,
                 "origin": lot.get("note"), "account": lot.get("account"),
                 "held_days": (today - acquired).days,
                 "free_on": free_on.isoformat(),
@@ -503,6 +661,11 @@ def build_lots(conn, table, until=None):
             })
 
     return disposals, sorted(open_lots, key=lambda x: x["acquired"]), warnings, notes
+
+
+def day_de(d):
+    """2026-03-14 -> 14.03.2026"""
+    return f"{d[8:10]}.{d[5:7]}.{d[:4]}"
 
 
 # --- Toepfe 20 und 22 ------------------------------------------------------
@@ -550,10 +713,11 @@ def get_loss_carryforward(conn):
 def set_loss_carryforward(conn, year, bucket, amount, note=""):
     if bucket not in ("par23", "par20", "par22"):
         raise ValueError(f"Verlustvortrag ist für {bucket} nicht vorgesehen.")
-    amount = L.D(amount)
-    if amount < 0:
-        raise ValueError("Verlustvortrag als positive Zahl eintragen (Höhe des Verlusts).")
-    if amount == 0:
+    if amount is not None:
+        amount = L.D(amount)
+        if amount < 0:
+            raise ValueError("Verlustvortrag als positive Zahl eintragen (Höhe des Verlusts).")
+    if amount is None:
         conn.execute("DELETE FROM loss_carryforward WHERE year = ? AND bucket = ?",
                     (year, bucket))
     else:
@@ -574,8 +738,9 @@ def bucket_rows(conn, bucket, year, table):
     Detailliste im Report - nicht nur die Summe wie flat_bucket()."""
     rows = conn.execute(
         """SELECT t.id, t.ts_utc, t.tx_type, t.note FROM transactions t
-           WHERE t.tax_bucket = ? AND substr(t.ts_utc,1,4) = ?
-           ORDER BY t.ts_utc""", (bucket, str(year))).fetchall()
+           WHERE t.tax_bucket = ? AND substr(t.ts_utc,1,4) IN (?, ?)
+           ORDER BY t.ts_utc""", (bucket, str(year), str(year - 1))).fetchall()
+    rows = [t for t in rows if year_of(t["ts_utc"]) == year]
 
     out = []
     for t in rows:
@@ -593,7 +758,7 @@ def bucket_rows(conn, bucket, year, table):
                 eur_total += v
                 any_priced = True
         out.append({
-            "id": t["id"], "date": day, "txType": t["tx_type"], "note": t["note"],
+            "id": t["id"], "date": de_day(t["ts_utc"]), "txType": t["tx_type"], "note": t["note"],
             "native": native, "eur": eur_total if any_priced else None,
         })
     return out
@@ -689,10 +854,11 @@ async def build_report(conn, fetcher=None):
 
     years = sorted({d["year"] for d in disposals}
                    | {y["year"] for y in p20} | {y["year"] for y in p22}
-                   | {int(r[0]) for r in conn.execute(
-                       "SELECT DISTINCT substr(ts_utc,1,4) FROM transactions")})
+                   | {year_of(r[0]) for r in conn.execute(
+                       "SELECT ts_utc FROM transactions")})
 
     out_years = []
+    auto_carry = {"par23": Decimal(0), "par20": Decimal(0), "par22": Decimal(0)}
     for y in years:
         d_y = [d for d in disposals if d["year"] == y and d["taxable"]]
         d_free = [d for d in disposals if d["year"] == y and not d["taxable"]]
@@ -707,12 +873,18 @@ async def build_report(conn, fetcher=None):
         rows22 = bucket_rows(conn, "par22", y, table)
         all_by_bucket = {b: bucket_rows(conn, b, y, table) for b in ALL_BUCKETS}
 
-        # Manueller Verlustvortrag (keine automatische Fortschreibung). Bei
-        # § 23/§ 22 erst Freigrenze pruefen, dann Vortrag - siehe
-        # apply_freigrenze().
-        c23 = carry.get((y, "par23"), {}).get("amount", Decimal(0))
-        c20 = carry.get((y, "par20"), {}).get("amount", Decimal(0))
-        c22 = carry.get((y, "par22"), {}).get("amount", Decimal(0))
+        # Verlustvortrag: automatisch aus dem Vorjahr fortgeschrieben (Rest-
+        # vortrag + Verlust des Vorjahres). Ein von Hand eingetragener Wert
+        # fuer dieses Jahr (z. B. laut Feststellungsbescheid) geht vor. Bei
+        # § 23/§ 22 erst Freigrenze pruefen, dann Vortrag - apply_freigrenze().
+        src = {}
+        for b in ("par23", "par20", "par22"):
+            if (y, b) in carry:
+                auto_carry[b] = carry[(y, b)]["amount"]
+                src[b] = "manual"
+            else:
+                src[b] = "auto" if auto_carry[b] else "none"
+        c23, c20, c22 = auto_carry["par23"], auto_carry["par20"], auto_carry["par22"]
         fg23 = apply_freigrenze(gain, c23, fg)
         fg22 = apply_freigrenze(sum22, c22, FREIGRENZE_22)
         gain_after = fg23["afterCarry"]
@@ -724,6 +896,12 @@ async def build_report(conn, fetcher=None):
         r20_taxable = (max(r20_after - SPARERPAUSCHBETRAG, Decimal(0))
                       if r20 >= 0 else r20_after)
 
+        # Vortrag fuers Folgejahr: unverbrauchter Rest plus Verlust dieses Jahres.
+        out23 = fg23["carryRemaining"] + (-gain if gain < 0 else Decimal(0))
+        out22 = fg22["carryRemaining"] + (-sum22 if sum22 < 0 else Decimal(0))
+        out20 = (c20 - used20) + (-r20 if r20 < 0 else Decimal(0))
+        auto_carry = {"par23": out23, "par20": out20, "par22": out22}
+
         decl = declaration_values(d_y, rows20, rows22, {
             "par23": (gain, fg23), "par22": (sum22, fg22),
             "par20": (r20, used20, r20_taxable)})
@@ -734,6 +912,8 @@ async def build_report(conn, fetcher=None):
             "par23": {
                 "gain": gain,
                 "lossCarryIn": c23,
+                "carrySource": src["par23"],
+                "carryOut": out23,
                 "gainAfterCarry": gain_after,
                 "carryUsed": fg23["carryUsed"],
                 "carryRemaining": fg23["carryRemaining"],
@@ -747,6 +927,8 @@ async def build_report(conn, fetcher=None):
             "par20": {
                 "result": r20,
                 "lossCarryIn": c20,
+                "carrySource": src["par20"],
+                "carryOut": out20,
                 "resultAfterCarry": r20_after,
                 "carryUsed": used20,
                 "carryRemaining": c20 - used20,
@@ -764,6 +946,8 @@ async def build_report(conn, fetcher=None):
             "par22": {
                 "result": sum22,
                 "lossCarryIn": c22,
+                "carrySource": src["par22"],
+                "carryOut": out22,
                 "resultAfterCarry": sum22_after,
                 "carryUsed": fg22["carryUsed"],
                 "carryRemaining": fg22["carryRemaining"],
@@ -850,15 +1034,19 @@ def methodology():
     Rueckfrage des Finanzamts (BMF 6.3.2025: Verwendungsreihenfolge,
     Kurse und Zeitpunkte muessen nachvollziehbar sein)."""
     return [
-        "Verwendungsreihenfolge: FIFO je Kryptowert über alle Konten gemeinsam "
-        "(OKX Funding/Trading/Earn und Trezor).",
+        "Verwendungsreihenfolge: FIFO je Kryptowert und je Wallet (BMF 6.3.2025, Rz. 61). "
+        "Wallets: OKX (Funding-, Trading- und Earn-Konto zusammen) und Trezor. Bei einer "
+        "Umbuchung zwischen den Wallets wandern die Lots mit Anschaffungsdatum und "
+        "Anschaffungskosten in die Ziel-Wallet.",
         "Haltefrist: Die Jahresfrist beginnt am Tag nach der Anschaffung und endet mit "
         "Ablauf des gleichnamigen Kalendertags im Folgejahr (§ 108 AO, §§ 187, 188 BGB); "
         "ein Verkauf an diesem Tag ist noch steuerpflichtig.",
-        "Zeitpunkte: Zeitstempel der Börse, umgerechnet nach UTC; Datum nach UTC.",
-        "Kurse: EUR-Tageskurs der OKX-Public-API; wo am selben Tag ein eigener "
-        "Umtausch gegen EUR stattfand, dessen tatsächlicher Kurs. Wallet-Bestände mit "
-        "dem tatsächlich gezahlten Einstandswert.",
+        "Zeitpunkte: Zeitstempel der Börse; Anschaffungs- und Veräußerungstag sowie das "
+        "Steuerjahr nach deutscher Zeit (MEZ/MESZ). EUR-Tageskurse je UTC-Tag.",
+        "Kurse: Bei Käufen und Verkäufen gegen EUR der tatsächlich gezahlte bzw. "
+        "erhaltene EUR-Betrag. Sonst EUR-Tageskurs der OKX-Public-API (bzw. der Kurs "
+        "eines eigenen EUR-Umtauschs am selben Tag). Wallet-Bestände mit dem "
+        "tatsächlich gezahlten Einstandswert.",
         "Tausch Krypto gegen Krypto ist eine Veräußerung; in Krypto gezahlte Gebühren "
         "und Funding sind Veräußerungen der hingegebenen Kryptowerte (§ 23 EStG).",
         "Gebühren bei Tauschgeschäften: beim Kauf Anschaffungsnebenkosten, beim Verkauf "
@@ -870,6 +1058,10 @@ def methodology():
         "Veräußerung; das ursprüngliche Anschaffungsdatum bleibt erhalten.",
         "Freigrenze (§ 23: 1.000 € ab 2024, davor 600 €; § 22 Nr. 3: 256 €) wird vor "
         "einem Verlustvortrag geprüft (BFH IX R 27/04).",
+        "Verlustvortrag: je Topf automatisch fortgeschrieben (nicht verbrauchter Vortrag "
+        "plus Verlust des Vorjahres). Ein von Hand eingetragener Wert, etwa laut "
+        "Feststellungsbescheid, ersetzt den automatischen. Ein Verlustrücktrag ins "
+        "Vorjahr (§ 10d EStG) ist nicht abgebildet.",
         "Erhaltene Prämien/Airdrops („Received“) sind vorläufig § 22 Nr. 3 zugeordnet; "
         "Zuordnung je Buchung änderbar.",
     ]

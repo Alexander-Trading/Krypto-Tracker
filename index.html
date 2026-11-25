@@ -75,8 +75,9 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .td-sum{padding:4px 20px 12px}
 .td-sum .tbd-row{display:flex;justify-content:space-between;gap:12px;font-family:var(--mono);
   font-size:12.5px;padding:3px 0}
-.td-sum .tbd-row span:last-child{white-space:nowrap;text-align:right}
-.td-sum .tbd-row span:first-child{min-width:0}
+.td-sum .tbd-row{flex-wrap:wrap}
+.td-sum .tbd-row span:last-child{white-space:nowrap;text-align:right;margin-left:auto}
+.td-sum .tbd-row span:first-child{min-width:0;flex:1 1 50%}
 .td-sum .tbd-row.total{border-top:1px solid var(--line);margin-top:4px;padding-top:7px;
   font-weight:600;font-size:13.5px}
 .td-chips{display:flex;flex-wrap:wrap;gap:6px;padding:0 20px 12px}
@@ -224,6 +225,18 @@ button{-webkit-tap-highlight-color:transparent}
 .carryrow button:active{transform:scale(.98)}
 .carrysaved{grid-column:1/-1;font-size:11.5px;color:var(--up)}
 .carry-in{display:flex;align-items:center;gap:8px}
+.carry-src{display:block;font-size:11.5px;color:var(--faint);font-weight:400;margin-top:3px}
+.cal-m{padding:12px 20px;border-top:1px solid var(--line)}
+.cal-m:first-child{border-top:none}
+.cal-h{font-size:12px;font-weight:600;color:var(--faint);text-transform:uppercase;letter-spacing:.06em;margin-bottom:6px}
+.cal-r{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 10px;align-items:baseline;padding:4px 0;font-size:13.5px}
+.cal-r .d{font-family:var(--mono);font-size:12px;color:var(--faint)}
+.cal-r .v{font-family:var(--mono);font-size:12.5px;text-align:right}
+.cal-r .s{grid-column:2/-1;font-size:11.5px;color:var(--faint)}
+.coin-g{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:8px 0 2px}
+.coin-g div{background:var(--panel-2);border-radius:10px;padding:8px 10px}
+.coin-g b{display:block;font-family:var(--mono);font-size:13px;font-weight:600;margin-top:2px}
+.coin-g span{font-size:10.5px;color:var(--faint);text-transform:uppercase;letter-spacing:.05em}
 .carry-in span{font-family:var(--mono);font-size:13px;color:var(--faint)}
 .pad{padding:18px 20px}
 .ch{display:flex;justify-content:space-between;align-items:center;gap:14px;
@@ -617,7 +630,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-25.9";
+const APP_BUILD="2026-11-25.10";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
@@ -1561,21 +1574,26 @@ function taxPanel(){
     <details class="card meth"><summary>Rechenweg und Methoden</summary>
       <ul>${(TAXR.methodology||[]).map(m=>`<li>${esc(m)}</li>`).join("")}</ul></details>` : "";
 
-  const carryRow = (bucket, label, val) => `<div class="carryrow" data-bucket="${bucket}">
-    <label>${label}</label>
+  const carryRow = (bucket, label, part) => {
+    const val = N(part.lossCarryIn), manual = part.carrySource === "manual";
+    return `<div class="carryrow" data-bucket="${bucket}">
+    <label>${label}<span class="carry-src">${manual ? "von Hand eingetragen"
+      : (val>0 ? "automatisch aus "+(YEAR-1) : "kein Vortrag")}${
+      N(part.carryOut)>0 ? ` · Vortrag nach ${YEAR+1}: ${eur(part.carryOut)}` : ""}</span></label>
     <div class="carry-in"><input type="text" inputmode="decimal" class="carry-input"
-      value="${val>0?nf(val):""}" placeholder="0,00" aria-label="${label} in Euro"><span>€</span></div>
+      value="${manual?nf(val):""}" placeholder="${!manual&&val>0?nf(val):"automatisch"}"
+      aria-label="${label} in Euro"><span>€</span></div>
     <button class="carry-save">Speichern</button>
     <span class="carrysaved hidden">✓ gespeichert</span>
-  </div>`;
+  </div>`; };
   const carryCard = `<div class="sect">Verlustvortrag ${YEAR}</div>
     <div class="card">
-      <div class="note" style="padding:12px 20px 0">Verlust aus Vorjahren, der in diesem Jahr
-        noch zur Verrechnung ansteht - je Topf, als positive Zahl. Wird nicht automatisch
-        fortgeschrieben.</div>
-      ${carryRow("par23","§ 23 · Veräußerungsgeschäfte", c23in)}
-      ${carryRow("par20","§ 20 · Termingeschäfte", c20in)}
-      ${carryRow("par22","§ 22 · Sonstige Einkünfte", c22in)}
+      <div class="note" style="padding:12px 20px 0">Wird automatisch fortgeschrieben:
+        nicht verbrauchter Vortrag plus Verlust des Vorjahres. Weicht der Bescheid ab, trag
+        den Betrag von Hand ein. Feld leeren und speichern = wieder automatisch.</div>
+      ${carryRow("par23","§ 23 · Veräußerungsgeschäfte", y.par23)}
+      ${carryRow("par20","§ 20 · Termingeschäfte", y.par20)}
+      ${carryRow("par22","§ 22 · Sonstige Einkünfte", y.par22)}
     </div>`;
 
   // Bei vielen kleinen Zukaeufen (z.B. jede einzelne Funding-Gutschrift ein
@@ -1604,7 +1622,7 @@ function taxPanel(){
     const p = next ? Math.min(100, next.held_days/365*100) : 100;
     const detail = list.map(l=>`<div class="ld">
         <span class="d">${day(l.acquired)}</span>
-        <span class="q">${nfx(l.qty)} ${esc(asset)}</span>
+        <span class="q">${nfx(l.qty)} ${esc(asset)}${l.wallet?` · ${esc(l.wallet)}`:""}</span>
         ${l.origin?`<span class="o">${esc(l.origin)}</span>`:""}
         <span class="m">
           <span class="${l.tax_free?"pos":"fee"}">${l.tax_free
@@ -1627,6 +1645,80 @@ function taxPanel(){
           + `<div class="lw-s">${nfx(freeQty)} ${esc(asset)} steuerfrei · ${nfx(pendQty)} ${esc(asset)} noch gebunden</div>`
         : '<div class="lw-m pos">alles steuerfrei</div>'}</div>
     </div><details class="ldet"><summary>Einzelne Zukäufe anzeigen</summary>${detail}</details></div>`;}).join("");
+
+  // Haltefrist-Kalender: wann welcher Teil steuerfrei wird, nach Monat.
+  const MON = ["Januar","Februar","März","April","Mai","Juni","Juli","August",
+               "September","Oktober","November","Dezember"];
+  const pend = (TAXR.openLots||[]).filter(l=>!l.tax_free)
+    .sort((a,b)=> a.free_on<b.free_on?-1:1);
+  const freeNow = (TAXR.openLots||[]).filter(l=>l.tax_free);
+  const sumOf = (list, k)=> list.every(l=>l[k]!=null) ? list.reduce((t,l)=>t+N(l[k]),0) : null;
+  const calMonths = {};
+  pend.forEach(l=>{
+    const m = l.free_on.slice(0,7);
+    const g = (calMonths[m] = calMonths[m] || {});
+    // je Monat und Coin eine Zeile - sonst wird jede kleine USDC-Gutschrift
+    // eine eigene Zeile
+    (g[l.asset] = g[l.asset] || {date:l.free_on, last:l.free_on, asset:l.asset, list:[]}).list.push(l);
+    g[l.asset].last = l.free_on;
+  });
+  const fvNow = sumOf(freeNow,"value_eur"), fuNow = sumOf(freeNow,"unrealized_eur");
+  const calendar = `<div class="sect">Haltefrist-Kalender</div>
+    <div class="card">
+      <div class="cal-m"><div class="cal-h">Heute schon steuerfrei</div>
+        <div class="cal-r"><span class="d">jetzt</span><span>${freeNow.length
+          ? [...new Set(freeNow.map(l=>l.asset))].map(a=>nfx(freeNow.filter(l=>l.asset===a)
+              .reduce((t,l)=>t+N(l.qty),0))+" "+esc(a)).join(" · ")
+          : "nichts"}</span>
+          <span class="v">${fvNow!=null&&freeNow.length?eur(fvNow):""}</span>
+          ${fuNow!=null&&freeNow.length?`<span class="s">davon Kursgewinn <span class="${fuNow>=0?"pos":"neg"}">${sgn(fuNow)} €</span> – Verkauf ohne Steuer möglich</span>`:""}</div></div>
+      ${Object.entries(calMonths).slice(0,12).map(([m,g])=>`<div class="cal-m">
+        <div class="cal-h">${MON[+m.slice(5,7)-1]} ${m.slice(0,4)}</div>
+        ${Object.values(g).map(x=>{
+          const q = x.list.reduce((t,l)=>t+N(l.qty),0);
+          const v = sumOf(x.list,"value_eur"), u = sumOf(x.list,"unrealized_eur");
+          const w = [...new Set(x.list.map(l=>l.wallet).filter(Boolean))].join(", ");
+          const dd = day(x.date).slice(0,6), dl2 = day(x.last).slice(0,6);
+          return `<div class="cal-r"><span class="d">${dd===dl2?"ab "+dd:dd.slice(0,3)+"–"+dl2}</span>
+            <span>${nfx(q)} ${esc(x.asset)}</span><span class="v">${v!=null?eur(v):""}</span>
+            <span class="s">${[w?esc(w):"", x.list.length>1?x.list.length+" Zukäufe":"",
+              u!=null?`Kursgewinn heute <span class="${u>=0?"pos":"neg"}">${sgn(u)} €</span>`:""]
+              .filter(Boolean).join(" · ")}</span></div>`;
+        }).join("")}</div>`).join("")}
+      ${pend.length ? "" : `<div class="note" style="padding:4px 20px 14px">Alle offenen Bestände
+        sind bereits steuerfrei.</div>`}
+    </div>`;
+
+  // Ergebnis je Coin (§ 23): realisiert im gewaehlten Jahr + nicht realisiert heute.
+  const coins = {};
+  const cslot = a => coins[a] = coins[a] || {asset:a, tax:0, free:0, realKnown:true, n:0,
+                                             qty:0, value:0, unreal:0, openKnown:true, open:0};
+  y.par23.disposals.forEach(d=>{
+    const c = cslot(d.asset); c.n++;
+    if(d.gain_eur==null){ c.realKnown=false; return; }
+    if(d.taxable) c.tax += N(d.gain_eur); else c.free += N(d.gain_eur);
+  });
+  (TAXR.openLots||[]).forEach(l=>{
+    const c = cslot(l.asset); c.open++; c.qty += N(l.qty);
+    if(l.value_eur==null || l.unrealized_eur==null){ c.openKnown=false; return; }
+    c.value += N(l.value_eur); c.unreal += N(l.unrealized_eur);
+  });
+  const coinList = Object.values(coins).sort((a,b)=>
+    (Math.abs(b.unreal)+Math.abs(b.tax)+Math.abs(b.free)) - (Math.abs(a.unreal)+Math.abs(a.tax)+Math.abs(a.free)));
+  const money = (v, ok)=> ok ? `<b class="${v>=0?"pos":"neg"}">${sgn(v)} €</b>` : "<b>–</b>";
+  const coinCard = coinList.length ? `<div class="sect">Ergebnis je Coin</div>
+    <div class="card">${coinList.map(c=>`<div class="rvrow" style="display:block">
+      <div class="title">${esc(c.asset)}${c.open?` <span class="note-s">· Bestand ${nfx(c.qty)}${
+        c.openKnown?" · "+eur(c.value):""}</span>`:""}</div>
+      <div class="coin-g">
+        <div><span>${YEAR} steuerpfl.</span>${money(c.tax, c.realKnown)}</div>
+        <div><span>${YEAR} steuerfrei</span>${money(c.free, c.realKnown)}</div>
+        <div><span>Nicht realisiert</span>${c.open?money(c.unreal, c.openKnown):"<b>–</b>"}</div>
+      </div></div>`).join("")}
+      <div class="note" style="padding:10px 20px 14px">Realisiert = Veräußerungen nach § 23 im Jahr
+        ${YEAR} (Tausch, Verkauf, Gebühren und Funding in Krypto). Nicht realisiert = heutiger
+        Wert minus Anschaffungskosten der offenen Bestände. Futures-Ergebnisse (§ 20) stehen
+        oben in der § 20-Kachel.</div></div>` : "";
 
   // Veraeusserungen zu Tag+Asset zusammenfassen - bei haeufigem Handel
   // (Funding jede Stunde, Gebuehren pro Trade) entsteht sonst eine Zeile
@@ -1672,6 +1764,8 @@ function taxPanel(){
     ${declCard}
     ${carryCard}
     ${statementsCard()}
+    ${coinCard}
+    ${calendar}
     <div class="sect">Offene Bestände und Haltefristen</div>
     <div class="note" style="padding:0 20px 10px">Je Asset zusammengefasst - der nächste
       Zukauf, der steuerfrei wird, bestimmt den Balken (FIFO: ältester Rest zuerst). Die
@@ -2129,8 +2223,8 @@ function wireTax(){
     const saved = row.querySelector(".carrysaved");
     btn.onclick = async () => {
       const raw = numIn(input.value);            // "1.234,56" und "1234.56"
-      const amount = raw === "" ? 0 : Number(raw);
-      if(Number.isNaN(amount) || amount < 0){ alert("Bitte eine positive Zahl eintragen."); return; }
+      const amount = raw === "" ? null : Number(raw);   // leer = automatisch
+      if(amount!=null && (Number.isNaN(amount) || amount < 0)){ alert("Bitte eine positive Zahl eintragen."); return; }
       btn.disabled = true;
       try{
         await api("/api/losscarry", {year: YEAR, bucket, amount});
