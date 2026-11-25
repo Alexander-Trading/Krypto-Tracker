@@ -116,8 +116,6 @@ h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
 .fund-bar i{display:block;height:100%;border-radius:4px}
 .fund-bar i.neg{background:var(--down)} .fund-bar i.pos{background:var(--up)}
 .fund-mv{text-align:right;white-space:nowrap}
-.fund-cmp{margin-top:6px}
-.fund-cmp .tbd-row span:first-child{display:flex;align-items:center;gap:6px;flex-wrap:wrap}
 #panel .card > .decl-h{padding:14px 20px 4px;font-size:13px;font-weight:600}
 .decl .decl-h{padding:14px 20px 4px;font-size:13px;font-weight:600}
 .decl .decl-n{padding:0 20px 6px}
@@ -619,7 +617,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-25.8";
+const APP_BUILD="2026-11-25.9";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
@@ -911,8 +909,6 @@ function positions(){
 
 /* ===== Funding-Kosten ===== */
 let FUND = null, FUND_LOADING = false;
-let FUND_RATE = "2";
-try{ FUND_RATE = localStorage.getItem("kt-fund-rate") || "2"; }catch(e){}
 
 async function loadFunding(force){
   if(FUND_LOADING || (FUND && !force)) return;
@@ -933,37 +929,13 @@ function fundingCard(){
   const dl = (l, v, c) => `<div class="tbd-row ${c||""}"><span>${l}</span><span>${v}</span></div>`;
   const ps = STATE.positions||[];
 
-  // Je Instrument; bei offener Position: Kosten in % p.a. vom Positionswert
-  // und Vergleich mit einem Spot-Kauf derselben Menge.
+  // Je Instrument; bei offener Position: Kosten in % p.a. vom Positionswert.
   const inst = FUND.instruments.map(i=>{
     const k = ps.findIndex(p=>p.instrument===i.instrument);
     const p = k>=0 ? ps[k] : null, mk = k>=0 ? (MARKET||[])[k] : null;
     const mark = mk && !mk.error && mk.markPrice ? N(mk.markPrice) : null;
     const notional = p && mark ? Math.abs(N(p.size)) * mark : null;     // USD ≈ USDC
     const pct = notional ? -N(i.annual30) / notional * 100 : null;
-    let cmp = "";
-    if(notional){
-      const margin = N(p.margin_balance) || 0;
-      const extra = Math.max(0, notional - margin);
-      const rate = N(FUND_RATE.replace(",", ".")) || 0;
-      const interest = extra * rate / 100;
-      const fundYear = -N(i.annual30);
-      cmp = `<div class="fund-cmp">
-        <div class="decl-h" style="padding:10px 0 4px">Vergleich mit Spot-Kauf derselben Menge</div>
-        <div class="td-sum" style="padding:0">
-          ${dl("Positionswert", nf(notional)+" USDC")}
-          ${dl("Eingesetzte Marge", nf(margin)+" USDC")}
-          ${dl("Mehrkapital für Spot", nf(extra)+" USDC")}
-          ${dl(`Entgangene Zinsen darauf bei <input class="mini" id="fundRate" inputmode="decimal" value="${esc(FUND_RATE)}" style="width:52px"> % p.a.`, nf(interest)+" USDC/Jahr")}
-          ${dl("Funding (hochgerechnet, letzte 30 Tage)", (fundYear>=0?"":"−")+nf(Math.abs(fundYear))+" USDC/Jahr", "total")}
-        </div>
-        <div class="note-s chk-d">${fundYear > interest
-          ? `Beim aktuellen Funding kostet die Position rund ${nf(fundYear-interest)} USDC/Jahr mehr als ein Spot-Kauf inkl. entgangener Zinsen.`
-          : `Beim aktuellen Funding ist die Position günstiger als ein Spot-Kauf inkl. entgangener Zinsen (Vorteil rund ${nf(interest-fundYear)} USDC/Jahr).`}
-          Steuerlich: Futures-Ergebnis inkl. Funding nach § 20 EStG (Abgeltungsteuer 25 % zzgl. Soli);
-          Spot-Kauf nach § 23 EStG – nach einem Jahr Haltedauer steuerfrei. Funding schwankt stark;
-          die Hochrechnung ist eine Momentaufnahme.</div></div>`;
-    }
     return `<div class="rvrow" style="display:block"><div class="title">${esc(i.instrument)}${
         i.stale?` <span class="tag" data-b="neutral">kein Funding mehr seit ${day(i.last)}</span>`:""}</div>
       <div class="td-sum" style="padding:6px 0 0">
@@ -972,7 +944,7 @@ function fundingCard(){
         ${dl("Letzte 30 Tage", `${nfx(i.net30)} ${esc(i.asset||"USDC")}`)}
         ${i.stale?"":dl("Hochgerechnet aufs Jahr", `${nfx(i.annual30)} ${esc(i.asset||"USDC")}`)}
         ${pct!=null?dl("Entspricht p.a. vom Positionswert", (pct>=0?"":"+")+Math.abs(pct).toFixed(2).replace(".",",")+" %"+(pct>=0?" Kosten":" Ertrag")):""}
-      </div>${cmp}</div>`;
+      </div></div>`;
   }).join("");
 
   const maxM = Math.max(1, ...FUND.months.map(m=>Math.abs(N(m.netEur))));
@@ -995,13 +967,6 @@ function fundingCard(){
       <div class="note" style="padding:10px 20px 14px">EUR zum Tageskurs der Zahlung. Funding ist Teil des
         § 20-Ergebnisses und mindert es.</div>
     </div>`;
-}
-
-function wireFunding(){
-  const r = $("#fundRate");
-  if(r) r.onchange = ()=>{ FUND_RATE = r.value.trim() || "0";
-    try{ localStorage.setItem("kt-fund-rate", FUND_RATE); }catch(e){}
-    render(); };
 }
 
 function posCard(p, mk){
@@ -2077,7 +2042,7 @@ function render(){
       loadRecent();
     }
   }
-  else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); wireMarginAdjust(); wireFunding(); }
+  else if(TAB==="positions"){ p.innerHTML=positions(); wirePicker(); wireMarginAdjust(); }
   else if(TAB==="journal"){ p.innerHTML=journalPanel(); loadJournal(); }
   else if(TAB==="tx"){ p.innerHTML=txPanel(); wireTx(); loadTx(false); }
   else if(TAB==="review"){ p.innerHTML=reviewPanel(); loadReview(); }
