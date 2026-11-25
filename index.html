@@ -4,6 +4,10 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Krypto-Tracker</title>
+<link rel="icon" type="image/svg+xml" href="icons/logo.svg">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="apple-mobile-web-app-title" content="Krypto-Tracker">
+<meta name="theme-color" content="#0A0D12">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -45,6 +49,7 @@ body{background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:14.5
 header{display:flex;justify-content:space-between;align-items:center;gap:18px;
   flex-wrap:wrap;margin-bottom:20px}
 .brand{display:flex;align-items:center;gap:10px}
+.brand .logo{width:34px;height:34px;flex:0 0 34px}
 .dot{width:8px;height:8px;border-radius:50%;background:var(--a23);
   box-shadow:0 0 12px rgba(63,191,143,.6)}
 h1{font-size:18px;font-weight:600;letter-spacing:-.02em;margin:0}
@@ -510,7 +515,12 @@ input.mini{font-family:var(--mono);font-size:12.5px;padding:7px 10px;border-radi
 <div class="wrap">
   <header>
     <div class="brand">
-      <span class="dot"></span>
+      <svg class="logo" viewBox="0 0 64 64" aria-hidden="true">
+        <polygon points="32,8 52,20 52,44 32,56 12,44 12,20" fill="none" stroke="var(--a20)" stroke-width="4.5" stroke-linejoin="round"/>
+        <rect x="21" y="36" width="6" height="9" rx="1" fill="var(--a23)"/>
+        <rect x="29" y="29" width="6" height="16" rx="1" fill="var(--a23)"/>
+        <rect x="37" y="22" width="6" height="23" rx="1" fill="var(--a23)"/>
+      </svg>
       <div><h1>Krypto-Tracker</h1><div class="hsub">OKX · <span id="pageName">Übersicht</span></div></div>
     </div>
     <div class="hright">
@@ -583,7 +593,7 @@ const ORDER = ["unknown","par23","par20","par22","neutral"];
    Beim Start wird die aktuelle index.html ohne Cache geholt; traegt sie eine
    andere APP_BUILD-Kennung, wird einmalig unter neuer Adresse neu geladen.
    WICHTIG: APP_BUILD bei jeder Aenderung an index.html hochzaehlen. */
-const APP_BUILD="2026-11-25.5";
+const APP_BUILD="2026-11-25.6";
 (async function selfUpdate(){
   try{
     const url = new URL("index.html", location.href); url.search = "?nocache=" + Date.now();
