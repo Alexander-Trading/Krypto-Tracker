@@ -612,6 +612,12 @@ def build_holdings_pdf(h, meta_text="") -> bytes:
                    [30, 30, 40, 32, 38], num_cols=(2, 3, 4)))
     f.append(Spacer(1, 6))
     f.append(_kv_table(styles, [("Gesamtwert zum Stichtag", _money(h["totalValue"]))]))
+    unpriced = [a["asset"] for a in h["assets"] if not a.get("priced", True)]
+    if unpriced:
+        f.append(Spacer(1, 4))
+        f.append(Paragraph(
+            f"Achtung: Für {', '.join(unpriced)} lag kein EUR-Kurs vor – im Gesamtwert nicht "
+            "enthalten. Bericht mit Internetverbindung erneut erzeugen.", styles["warn"]))
     f.append(Spacer(1, 12))
 
     f.append(Paragraph("Je Kryptowert mit Anschaffungskosten (FIFO)", styles["h2"]))
@@ -675,6 +681,13 @@ def build_origin_pdf(o, meta_text="") -> bytes:
              (f"Wert am {day}", _money(o["valueNow"]))]
     f.append(_kv_table(styles, lines))
     f.append(Spacer(1, 4))
+    unpriced = [a["asset"] for a in o["holdings"]["assets"] if not a.get("priced", True)]
+    if unpriced:
+        f.append(Paragraph(
+            f"Achtung: Für {', '.join(unpriced)} lag zum {day} kein EUR-Kurs vor. Diese "
+            "Bestände sind im Wert nicht enthalten, die Abstimmung ist daher unvollständig. "
+            "Bericht mit Internetverbindung erneut erzeugen.", styles["warn"]))
+        f.append(Spacer(1, 4))
     f.append(Paragraph(
         "Abstimmung: Eingezahlt + mitgebrachte Kryptowerte − Ausgezahlt + realisiertes und "
         "nicht realisiertes Ergebnis = heutiger Wert. Die Mittel stammen damit aus den "
